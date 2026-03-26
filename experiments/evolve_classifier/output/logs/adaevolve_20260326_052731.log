@@ -1,0 +1,96 @@
+2026-03-26 05:27:31,151 - skydiscover.search.utils.logging_utils - INFO - Logging to ./output/logs/adaevolve_20260326_052731.log
+2026-03-26 05:27:31,151 - skydiscover.search.adaevolve.database - INFO - AdaEvolveDatabase initialized: num_islands=2, decay=0.9, intensity=[0.15, 0.5], migration=True (interval=10), unified_archive=True, adaptive_search=True, ucb_selection=True, dynamic_islands=True, paradigm_breakthrough=True, multiobjective=False
+2026-03-26 05:27:31,151 - skydiscover.runner - INFO - Runner ready: search=adaevolve, program=initial_program.py
+2026-03-26 05:27:31,181 - skydiscover.llm - INFO - OpenAI LLM: gpt-oss-120b
+2026-03-26 05:27:33,023 - httpx - INFO - HTTP Request: GET https://api.together.xyz/v1/models "HTTP/1.1 200 OK"
+2026-03-26 05:27:33,029 - skydiscover.evaluation.evaluator - INFO - Initialized evaluator with evaluator/evaluator.py
+2026-03-26 05:27:33,029 - skydiscover.search.default_discovery_controller - INFO - DiscoveryController initialized: num_context_programs=3
+2026-03-26 05:27:33,046 - skydiscover.search.adaevolve.controller - INFO - Paradigm LLM: using guide_models [gpt-oss-120b]
+2026-03-26 05:27:33,046 - skydiscover.search.adaevolve.controller - INFO - AdaEvolveController initialized (language=python, paradigm_breakthrough=True)
+2026-03-26 05:27:33,046 - skydiscover.runner - INFO - Adding initial program to database
+2026-03-26 05:27:40,246 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:41,671 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:41,801 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:42,124 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:42,291 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:42,392 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:42,872 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:42,955 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:43,045 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:43,291 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:43,491 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:43,868 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:43,887 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:43,981 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:44,746 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:45,179 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:45,453 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:45,474 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:45,760 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:45,822 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:46,806 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:47,171 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:47,624 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:47,704 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:48,040 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:48,185 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:48,516 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:50,335 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:50,816 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:51,434 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:51,579 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:51,896 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:52,608 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:53,315 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:53,452 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:53,736 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:54,681 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:54,938 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:54,940 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:55,460 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:55,462 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:55,705 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:55,970 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:56,296 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:56,318 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:56,320 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:56,328 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:56,336 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:56,350 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:56,387 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:56,422 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:56,450 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:56,710 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:56,946 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:57,958 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:59,210 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:59,790 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:27:59,889 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:28:00,073 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:28:05,197 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-26 05:28:05,206 - skydiscover.evaluation.evaluator - INFO - Evaluated program ef432c64-1ba0-4c25-81cd-0a146f52a608 in 32.16s: status=success, combined_score=0.1118, metrics={'1.1': {'f1': 0.129, 'precision': 0.1429, 'recall': 0.1176, 'tp': 2, 'fp': 12, 'fn': 15, 'tn': 31, 'support': 17}, '1.2': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 3, 'fn': 0, 'tn': 57, 'support': 0}, '1.3': {'f1': 0.1765, 'precision': 0.3333, 'recall': 0.12, 'tp': 3, 'fp': 6, 'fn': 22, 'tn': 29, 'support': 25}, '1.4': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 4, 'fn': 1, 'tn': 55, 'support': 1}, '1.5': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 2, 'fn': 17, 'tn': 41, 'support': 17}, '2.1': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 1, 'fn': 2, 'tn': 57, 'support': 2}, '2.2': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 7, 'fn': 13, 'tn': 40, 'support': 13}, '2.3': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 5, 'fn': 11, 'tn': 44, 'support': 11}, '2.4': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 4, 'fn': 2, 'tn': 54, 'support': 2}, '2.5': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 5, 'fn': 0, 'tn': 55, 'support': 0}, '2.6': {'f1': 0.3415, 'precision': 0.5, 'recall': 0.2593, 'tp': 7, 'fp': 7, 'fn': 20, 'tn': 26, 'support': 27}, '3.1': {'f1': 0.2609, 'precision': 0.2727, 'recall': 0.25, 'tp': 3, 'fp': 8, 'fn': 9, 'tn': 40, 'support': 12}, '3.2': {'f1': 0.2667, 'precision': 0.1818, 'recall': 0.5, 'tp': 4, 'fp': 18, 'fn': 4, 'tn': 34, 'support': 8}, '3.3': {'f1': 0.1667, 'precision': 0.1333, 'recall': 0.2222, 'tp': 2, 'fp': 13, 'fn': 7, 'tn': 38, 'support': 9}}, artifacts={'feedback': 'Macro-F1: 0.1118\n\nFM         F1      P      R   TP   FP   FN  sup\n------------------------------------------------\n1.1     0.129  0.143  0.118    2   12   15   17\n1.2     0.000  0.000  0.000    0    3    0    0\n1.3     0.176  0.333  0.120    3    6   22   25\n1.4     0.000  0.000  0.000    0    4    1    1\n1.5     0.000  0.000  0.000    0    2   17   17\n2.1     0.000  0.000  0.000    0    1    2    2\n2.2     0.000  0.000  0.000    0    7   13   13\n2.3     0.000  0.000  0.000    0    5   11   11\n2.4     0.000  0.000  0.000    0    4    2    2\n2.5     0.000  0.000  0.000    0    5    0    0\n2.6     0.342  0.500  0.259    7    7   20   27\n3.1     0.261  0.273  0.250    3    8    9   12\n3.2     0.267  0.182  0.500    4   18    4    8\n3.3     0.167  0.133  0.222    2   13    7    9\n\nWorst FMs (focus improvement here):\n  FM-1.4: F1=0.000 (TP=0, FP=4, FN=1)\n  FM-1.5: F1=0.000 (TP=0, FP=2, FN=17)\n  FM-2.1: F1=0.000 (TP=0, FP=1, FN=2)'}
+2026-03-26 05:28:05,208 - skydiscover.extras.monitor.server - INFO - Monitor server started → http://localhost:8765/
+2026-03-26 05:28:05,208 - skydiscover.runner - INFO - Live monitor: http://localhost:8765/
+2026-03-26 05:28:05,208 - skydiscover.runner - INFO - Human feedback: ./output/human_feedback.md
+2026-03-26 05:28:05,208 - skydiscover.extras.monitor.server - INFO - AI summary configured: model=gpt-5-mini, top_k=3, interval=manual, api_key=set
+2026-03-26 05:28:05,209 - skydiscover.runner - INFO - Pushed 1 existing program(s) to monitor
+2026-03-26 05:28:05,209 - skydiscover.search.base_database - INFO - Database has 1 programs, best program score is status=success, combined_score=0.1118, metrics={'1.1': {'f1': 0.129, 'precision': 0.1429, 'recall': 0.1176, 'tp': 2, 'fp': 12, 'fn': 15, 'tn': 31, 'support': 17}, '1.2': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 3, 'fn': 0, 'tn': 57, 'support': 0}, '1.3': {'f1': 0.1765, 'precision': 0.3333, 'recall': 0.12, 'tp': 3, 'fp': 6, 'fn': 22, 'tn': 29, 'support': 25}, '1.4': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 4, 'fn': 1, 'tn': 55, 'support': 1}, '1.5': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 2, 'fn': 17, 'tn': 41, 'support': 17}, '2.1': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 1, 'fn': 2, 'tn': 57, 'support': 2}, '2.2': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 7, 'fn': 13, 'tn': 40, 'support': 13}, '2.3': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 5, 'fn': 11, 'tn': 44, 'support': 11}, '2.4': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 4, 'fn': 2, 'tn': 54, 'support': 2}, '2.5': {'f1': 0.0, 'precision': 0.0, 'recall': 0.0, 'tp': 0, 'fp': 5, 'fn': 0, 'tn': 55, 'support': 0}, '2.6': {'f1': 0.3415, 'precision': 0.5, 'recall': 0.2593, 'tp': 7, 'fp': 7, 'fn': 20, 'tn': 26, 'support': 27}, '3.1': {'f1': 0.2609, 'precision': 0.2727, 'recall': 0.25, 'tp': 3, 'fp': 8, 'fn': 9, 'tn': 40, 'support': 12}, '3.2': {'f1': 0.2667, 'precision': 0.1818, 'recall': 0.5, 'tp': 4, 'fp': 18, 'fn': 4, 'tn': 34, 'support': 8}, '3.3': {'f1': 0.1667, 'precision': 0.1333, 'recall': 0.2222, 'tp': 2, 'fp': 13, 'fn': 7, 'tn': 38, 'support': 9}}, artifacts={'feedback': 'Macro-F1: 0.1118\n\nFM         F1      P      R   TP   FP   FN  sup\n------------------------------------------------\n1.1     0.129  0.143  0.118    2   12   15   17\n1.2     0.000  0.000  0.000    0    3    0    0\n1.3     0.176  0.333  0.120    3    6   22   25\n1.4     0.000  0.000  0.000    0    4    1    1\n1.5     0.000  0.000  0.000    0    2   17   17\n2.1     0.000  0.000  0.000    0    1    2    2\n2.2     0.000  0.000  0.000    0    7   13   13\n2.3     0.000  0.000  0.000    0    5   11   11\n2.4     0.000  0.000  0.000    0    4    2    2\n2.5     0.000  0.000  0.000    0    5    0    0\n2.6     0.342  0.500  0.259    7    7   20   27\n3.1     0.261  0.273  0.250    3    8    9   12\n3.2     0.267  0.182  0.500    4   18    4    8\n3.3     0.167  0.133  0.222    2   13    7    9\n\nWorst FMs (focus improvement here):\n  FM-1.4: F1=0.000 (TP=0, FP=4, FN=1)\n  FM-1.5: F1=0.000 (TP=0, FP=2, FN=17)\n  FM-2.1: F1=0.000 (TP=0, FP=1, FN=2)'}
+2026-03-26 05:28:05,209 - skydiscover.search.adaevolve.controller - INFO - AdaEvolve: Running 30 iterations across 2 islands
+2026-03-26 05:28:05,209 - skydiscover.search.adaevolve.controller - INFO - AdaEvolve iteration stats will be logged to: ./output/adaevolve_iteration_stats_20260326_052805.jsonl
+2026-03-26 05:28:05,209 - skydiscover.search.adaevolve.controller - INFO - Seeded island 1
+2026-03-26 05:28:06,463 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-03-26 05:28:06,464 - skydiscover.llm - WARNING - Error attempt 1/4: Error code: 404 - {'id': 'ocb1vi9-2kFHot-9e251f88dc80e5e6', 'error': {'message': 'Unable to access model gpt-oss-120b. Please visit https://api.together.ai/models to view the list of supported models.', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_available'}}, retrying...
+2026-03-26 05:28:12,450 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-03-26 05:28:12,451 - skydiscover.llm - WARNING - Error attempt 2/4: Error code: 404 - {'id': 'ocb1xYE-2kFHot-9e251faffdcf3919', 'error': {'message': 'Unable to access model gpt-oss-120b. Please visit https://api.together.ai/models to view the list of supported models.', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_available'}}, retrying...
+2026-03-26 05:28:18,368 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-03-26 05:28:18,369 - skydiscover.llm - WARNING - Error attempt 3/4: Error code: 404 - {'id': 'ocb1zKZ-2kFHot-9e251fd56cb51877', 'error': {'message': 'Unable to access model gpt-oss-120b. Please visit https://api.together.ai/models to view the list of supported models.', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_available'}}, retrying...
+2026-03-26 05:28:24,311 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-03-26 05:28:25,402 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-03-26 05:28:25,403 - skydiscover.llm - WARNING - Error attempt 1/4: Error code: 404 - {'id': 'ocb22Lt-2kFHot-9e251ffffe543925', 'error': {'message': 'Unable to access model gpt-oss-120b. Please visit https://api.together.ai/models to view the list of supported models.', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_available'}}, retrying...
+2026-03-26 05:28:30,898 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-03-26 05:28:30,899 - skydiscover.llm - WARNING - Error attempt 2/4: Error code: 404 - {'id': 'ocb24G9-2kFHot-9e2520265aeb2024', 'error': {'message': 'Unable to access model gpt-oss-120b. Please visit https://api.together.ai/models to view the list of supported models.', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_available'}}, retrying...
+2026-03-26 05:28:36,107 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-03-26 05:28:36,108 - skydiscover.llm - WARNING - Error attempt 3/4: Error code: 404 - {'id': 'ocb25p1-2kFHot-9e252048b9ff81f1', 'error': {'message': 'Unable to access model gpt-oss-120b. Please visit https://api.together.ai/models to view the list of supported models.', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_available'}}, retrying...
+2026-03-26 05:28:42,002 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-03-26 05:28:42,849 - httpx - INFO - HTTP Request: POST https://api.together.xyz/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-03-26 05:28:42,850 - skydiscover.llm - WARNING - Error attempt 1/4: Error code: 404 - {'id': 'ocb27bw-2kFHot-9e25206e9c832d1f', 'error': {'message': 'Unable to access model gpt-oss-120b. Please visit https://api.together.ai/models to view the list of supported models.', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_available'}}, retrying...

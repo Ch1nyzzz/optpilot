@@ -1,0 +1,326 @@
+{
+  "num_islands": 2,
+  "current_island": 0,
+  "iteration_count": 34,
+  "global_best_score": 0.3402,
+  "decay": 0.9,
+  "intensity_min": 0.15,
+  "intensity_max": 0.5,
+  "migration_interval": 10,
+  "diversity_strategy_type": "code",
+  "use_unified_archive": true,
+  "use_adaptive_search": true,
+  "use_ucb_selection": true,
+  "fixed_intensity": 0.4,
+  "adapter": {
+    "states": [
+      {
+        "accumulated_signal": 0.14753322992374066,
+        "best_score": 0.3402,
+        "improvement_count": 4,
+        "total_evaluations": 16,
+        "decay": 0.9,
+        "epsilon": 1e-08,
+        "intensity_min": 0.15,
+        "intensity_max": 0.5
+      },
+      {
+        "accumulated_signal": 0.15641614227282932,
+        "best_score": 0.3232,
+        "improvement_count": 4,
+        "total_evaluations": 15,
+        "decay": 0.9,
+        "epsilon": 1e-08,
+        "intensity_min": 0.15,
+        "intensity_max": 0.5
+      }
+    ],
+    "dimension_visits": [
+      16,
+      15
+    ],
+    "dimension_rewards": [
+      0.629922848192772,
+      0.24002416248602004
+    ],
+    "decayed_visits": [
+      8.14697981114816,
+      7.94108867905351
+    ],
+    "global_best_score": 0.3402,
+    "ucb_exploration": 1.41,
+    "min_visits": 3,
+    "decay": 0.9,
+    "epsilon": 1e-08
+  },
+  "island_config_names": [
+    "balanced",
+    "balanced"
+  ],
+  "islands": [
+    [
+      "d2a582a9-eb4b-4e0f-998e-3493f756a922",
+      "a6426ae5-9cdc-4655-8eb9-af49a485b337",
+      "169825ea-3190-47d8-95a5-01062512f861",
+      "f371c4c0-75fe-412b-bde0-cdb40d000120",
+      "6059a570-25aa-473f-951c-f6f4f14c30fe",
+      "1c28dd36-39a4-45ff-877f-12f150a48dad",
+      "144e3d12-921f-4155-91f7-829909a9712b",
+      "1cf477e1-72e3-4b59-97b9-c65577a24cfe",
+      "66c9dd70-b8ed-4a9c-8e7b-1101315aac0c",
+      "8408a1f3-8bf7-4e49-8283-1b8fc675d772",
+      "f962fa63-290c-4a55-ba9f-400a9f807093",
+      "cfcab6bd-0305-49b4-a2f6-1fc4cf5fdf2b",
+      "2391fcfb-25d4-4f2a-8872-327682dfc86f",
+      "b76a236b-d3cf-4b75-915a-533461f775f4",
+      "daf48a44-00a5-4671-8ee4-839df1f67825"
+    ],
+    [
+      "815c1f77-0768-458e-baef-78b44c0dbc0d",
+      "ba002b2a-7639-43bc-9beb-d341a0bfeffb",
+      "04c822aa-3866-4838-bc00-2ecf3fd0d42f",
+      "8dfd8c4e-a0e1-4000-9e29-5791c5ac9695",
+      "bd69a2a8-92bf-4956-b154-b83322a3b2aa",
+      "811129b5-8c30-4291-b6c9-daab37bcb045",
+      "8d0dfd29-a205-4a87-b97f-d695940f7b66",
+      "af7a1e85-9a81-4939-98fd-17ea1e14e274",
+      "a3c06491-16a3-44e8-b7d4-59dcd795c43e",
+      "eef5979b-7089-4463-9419-f36b9365b731",
+      "4f5560c3-54a3-4d8a-a6e6-5287eaf129d6",
+      "86750124-f27e-49c5-bde4-8d8b2f26a132",
+      "46d49034-cac9-458a-a9ab-6e494e03ffc3",
+      "eda64ac2-7694-4917-b4ee-ab1cdfccbae9",
+      "d25e8568-66d6-4852-8bd2-dbdd79f569d4"
+    ]
+  ],
+  "archive_genealogies": [
+    {
+      "parents": {
+        "d2a582a9-eb4b-4e0f-998e-3493f756a922": [],
+        "a6426ae5-9cdc-4655-8eb9-af49a485b337": [
+          "d2a582a9-eb4b-4e0f-998e-3493f756a922"
+        ],
+        "169825ea-3190-47d8-95a5-01062512f861": [
+          "d2a582a9-eb4b-4e0f-998e-3493f756a922"
+        ],
+        "f371c4c0-75fe-412b-bde0-cdb40d000120": [
+          "169825ea-3190-47d8-95a5-01062512f861"
+        ],
+        "6059a570-25aa-473f-951c-f6f4f14c30fe": [
+          "169825ea-3190-47d8-95a5-01062512f861"
+        ],
+        "1c28dd36-39a4-45ff-877f-12f150a48dad": [
+          "169825ea-3190-47d8-95a5-01062512f861"
+        ],
+        "144e3d12-921f-4155-91f7-829909a9712b": [
+          "1c28dd36-39a4-45ff-877f-12f150a48dad"
+        ],
+        "1cf477e1-72e3-4b59-97b9-c65577a24cfe": [
+          "bd69a2a8-92bf-4956-b154-b83322a3b2aa"
+        ],
+        "66c9dd70-b8ed-4a9c-8e7b-1101315aac0c": [
+          "1c28dd36-39a4-45ff-877f-12f150a48dad"
+        ],
+        "8408a1f3-8bf7-4e49-8283-1b8fc675d772": [
+          "144e3d12-921f-4155-91f7-829909a9712b"
+        ],
+        "f962fa63-290c-4a55-ba9f-400a9f807093": [
+          "144e3d12-921f-4155-91f7-829909a9712b"
+        ],
+        "cfcab6bd-0305-49b4-a2f6-1fc4cf5fdf2b": [
+          "1c28dd36-39a4-45ff-877f-12f150a48dad"
+        ],
+        "2391fcfb-25d4-4f2a-8872-327682dfc86f": [
+          "1c28dd36-39a4-45ff-877f-12f150a48dad"
+        ],
+        "b76a236b-d3cf-4b75-915a-533461f775f4": [
+          "86750124-f27e-49c5-bde4-8d8b2f26a132"
+        ],
+        "daf48a44-00a5-4671-8ee4-839df1f67825": [
+          "1c28dd36-39a4-45ff-877f-12f150a48dad"
+        ]
+      },
+      "children": {
+        "d2a582a9-eb4b-4e0f-998e-3493f756a922": [
+          "a6426ae5-9cdc-4655-8eb9-af49a485b337",
+          "169825ea-3190-47d8-95a5-01062512f861"
+        ],
+        "169825ea-3190-47d8-95a5-01062512f861": [
+          "f371c4c0-75fe-412b-bde0-cdb40d000120",
+          "6059a570-25aa-473f-951c-f6f4f14c30fe",
+          "1c28dd36-39a4-45ff-877f-12f150a48dad"
+        ],
+        "1c28dd36-39a4-45ff-877f-12f150a48dad": [
+          "144e3d12-921f-4155-91f7-829909a9712b",
+          "66c9dd70-b8ed-4a9c-8e7b-1101315aac0c",
+          "cfcab6bd-0305-49b4-a2f6-1fc4cf5fdf2b",
+          "2391fcfb-25d4-4f2a-8872-327682dfc86f",
+          "daf48a44-00a5-4671-8ee4-839df1f67825"
+        ],
+        "bd69a2a8-92bf-4956-b154-b83322a3b2aa": [
+          "1cf477e1-72e3-4b59-97b9-c65577a24cfe"
+        ],
+        "144e3d12-921f-4155-91f7-829909a9712b": [
+          "8408a1f3-8bf7-4e49-8283-1b8fc675d772",
+          "f962fa63-290c-4a55-ba9f-400a9f807093"
+        ],
+        "86750124-f27e-49c5-bde4-8d8b2f26a132": [
+          "b76a236b-d3cf-4b75-915a-533461f775f4"
+        ]
+      }
+    },
+    {
+      "parents": {
+        "815c1f77-0768-458e-baef-78b44c0dbc0d": [],
+        "ba002b2a-7639-43bc-9beb-d341a0bfeffb": [
+          "815c1f77-0768-458e-baef-78b44c0dbc0d"
+        ],
+        "04c822aa-3866-4838-bc00-2ecf3fd0d42f": [
+          "ba002b2a-7639-43bc-9beb-d341a0bfeffb"
+        ],
+        "8dfd8c4e-a0e1-4000-9e29-5791c5ac9695": [
+          "815c1f77-0768-458e-baef-78b44c0dbc0d"
+        ],
+        "bd69a2a8-92bf-4956-b154-b83322a3b2aa": [
+          "8dfd8c4e-a0e1-4000-9e29-5791c5ac9695"
+        ],
+        "811129b5-8c30-4291-b6c9-daab37bcb045": [
+          "1c28dd36-39a4-45ff-877f-12f150a48dad"
+        ],
+        "8d0dfd29-a205-4a87-b97f-d695940f7b66": [
+          "169825ea-3190-47d8-95a5-01062512f861"
+        ],
+        "af7a1e85-9a81-4939-98fd-17ea1e14e274": [
+          "811129b5-8c30-4291-b6c9-daab37bcb045"
+        ],
+        "a3c06491-16a3-44e8-b7d4-59dcd795c43e": [
+          "8d0dfd29-a205-4a87-b97f-d695940f7b66"
+        ],
+        "eef5979b-7089-4463-9419-f36b9365b731": [
+          "1c28dd36-39a4-45ff-877f-12f150a48dad"
+        ],
+        "4f5560c3-54a3-4d8a-a6e6-5287eaf129d6": [
+          "1c28dd36-39a4-45ff-877f-12f150a48dad"
+        ],
+        "86750124-f27e-49c5-bde4-8d8b2f26a132": [
+          "1c28dd36-39a4-45ff-877f-12f150a48dad"
+        ],
+        "46d49034-cac9-458a-a9ab-6e494e03ffc3": [
+          "86750124-f27e-49c5-bde4-8d8b2f26a132"
+        ],
+        "eda64ac2-7694-4917-b4ee-ab1cdfccbae9": [
+          "2391fcfb-25d4-4f2a-8872-327682dfc86f"
+        ],
+        "d25e8568-66d6-4852-8bd2-dbdd79f569d4": [
+          "eda64ac2-7694-4917-b4ee-ab1cdfccbae9"
+        ]
+      },
+      "children": {
+        "815c1f77-0768-458e-baef-78b44c0dbc0d": [
+          "ba002b2a-7639-43bc-9beb-d341a0bfeffb",
+          "8dfd8c4e-a0e1-4000-9e29-5791c5ac9695"
+        ],
+        "ba002b2a-7639-43bc-9beb-d341a0bfeffb": [
+          "04c822aa-3866-4838-bc00-2ecf3fd0d42f"
+        ],
+        "8dfd8c4e-a0e1-4000-9e29-5791c5ac9695": [
+          "bd69a2a8-92bf-4956-b154-b83322a3b2aa"
+        ],
+        "1c28dd36-39a4-45ff-877f-12f150a48dad": [
+          "811129b5-8c30-4291-b6c9-daab37bcb045",
+          "eef5979b-7089-4463-9419-f36b9365b731",
+          "4f5560c3-54a3-4d8a-a6e6-5287eaf129d6",
+          "86750124-f27e-49c5-bde4-8d8b2f26a132"
+        ],
+        "169825ea-3190-47d8-95a5-01062512f861": [
+          "8d0dfd29-a205-4a87-b97f-d695940f7b66"
+        ],
+        "811129b5-8c30-4291-b6c9-daab37bcb045": [
+          "af7a1e85-9a81-4939-98fd-17ea1e14e274"
+        ],
+        "8d0dfd29-a205-4a87-b97f-d695940f7b66": [
+          "a3c06491-16a3-44e8-b7d4-59dcd795c43e"
+        ],
+        "86750124-f27e-49c5-bde4-8d8b2f26a132": [
+          "46d49034-cac9-458a-a9ab-6e494e03ffc3"
+        ],
+        "2391fcfb-25d4-4f2a-8872-327682dfc86f": [
+          "eda64ac2-7694-4917-b4ee-ab1cdfccbae9"
+        ],
+        "eda64ac2-7694-4917-b4ee-ab1cdfccbae9": [
+          "d25e8568-66d6-4852-8bd2-dbdd79f569d4"
+        ]
+      }
+    }
+  ],
+  "use_dynamic_islands": true,
+  "max_islands": 4,
+  "last_spawn_iteration": -15,
+  "use_paradigm_breakthrough": true,
+  "paradigm_tracker": {
+    "window_size": 8,
+    "improvement_threshold": 0.1,
+    "max_paradigm_uses": 2,
+    "max_tried_paradigms": 8,
+    "num_paradigms_to_generate": 2,
+    "improvement_history": [
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0
+    ],
+    "active_paradigms": [
+      {
+        "idea": "Pre\u2011process the MAS trace with TF\u2011IDF keyword extraction and inject the top\u2011scoring sentences into the prompt as a concise \u201cHighlights\u201d section.",
+        "description": "Compute TF\u2011IDF scores for each sentence of the raw trajectory using `sklearn.feature_extraction.text.TfidfVectorizer`. Select the\u202fN\u202fsentences with the highest aggregate TF\u2011IDF weight (e.g.,\u202fN=5). Build a new prompt that starts with a short \"Highlights\" block containing those sentences, followed by the full definitions and the recall\u2011first rule. This gives the LLM immediate evidence of the most informative parts of a long trace, making subtle failure cues easier to spot without increasing prompt length dramatically.",
+        "what_to_optimize": "Recall for rare failure modes (especially 1.3, 1.5, 2.6) by ensuring the model sees the most relevant evidence first, thereby boosting macro\u2011F1.",
+        "cautions": "Limit the highlights to a small number of sentences to keep the total prompt under the model\u2019s context window. Use a deterministic tokenizer (e.g., `nltk.sent_tokenize`) to split sentences, and guard against empty highlights for very short traces. Preserve the original JSON output format unchanged.",
+        "approach_type": "sklearn.feature_extraction.text.TfidfVectorizer"
+      },
+      {
+        "idea": "Add a rule\u2011based pre\u2011scan that detects explicit failure cues with regular expressions and pre\u2011populates the prompt with a \u201cDetected hints\u201d list.",
+        "description": "Before calling the LLM, run a set of handcrafted regex patterns for each FM (e.g., `r\"repeat\"` or `r\"already computed\"` for 1.3, `r\"task completed\".*\"continue\"` for 1.5, `r\"but I did\".*\"different\"` for 2.6). Collect any matches and format them as a bullet list. Insert this list into the prompt right after the definitions, prefixed with \u201cPotential hints found:\u201d. The LLM then receives concrete evidence and is encouraged by the recall\u2011first rule to answer true, improving sensitivity without sacrificing precision.",
+        "what_to_optimize": "Directly increase true\u2011positive predictions for the hardest FMs by surfacing lexical cues that the LLM might otherwise miss, raising overall macro\u2011F1.",
+        "cautions": "Ensure regexes are broad enough to capture variations but not so generic that they cause many false positives; limit the list to at most one hint per FM to avoid bloating the prompt. Keep the JSON output generation identical to the original classifier function.",
+        "approach_type": "re.findall"
+      }
+    ],
+    "paradigm_usage_counts": {
+      "0": 2,
+      "1": 2
+    },
+    "current_paradigm_index": 1,
+    "tried_paradigms": [
+      {
+        "idea": "Ensemble LLM voting: invoke the classifier prompt multiple times with varied phrasing and aggregate the Boolean predictions via majority vote.",
+        "description": "Create a list of several alternative prompts that differ in wording (e.g., add explicit \"list evidence first\" instruction, use bullet points, or ask for a short rationale). For each trace, call llm_call for every prompt in parallel using ThreadPoolExecutor, parse each JSON response, and then compute the final label for each FM as the majority (or any\u2011true) of the returned booleans. This reduces variance of a single LLM call and tends to increase recall because any prompt that spots a subtle cue will trigger a true label that the others may miss.",
+        "what_to_optimize": "Recall for low\u2011coverage failure modes, overall macro\u2011F1",
+        "cautions": "Ensure all prompts request the exact same JSON format; handle missing or malformed responses by treating them as false. Limit the number of ensemble members (e.g., 3\u20135) to stay within API rate limits and latency constraints. Use a thread pool sized to the number of prompts to avoid excess concurrency.",
+        "approach_type": "concurrent.futures.ThreadPoolExecutor",
+        "uses": 2,
+        "starting_score": 0.3169,
+        "ending_score": 0.3169,
+        "score_improvement": 0.0,
+        "outcome": "FAILED"
+      },
+      {
+        "idea": "Keyword\u2011driven pre\u2011annotation: scan the trace for domain\u2011specific cue words/phrases and automatically set the corresponding FM flags to true before invoking the LLM.",
+        "description": "Define a dictionary mapping each FM ID to a list of regular\u2011expression patterns that capture its typical textual hints (e.g., FM\u20111.3 \u2192 \"repeat\", \"again\", \"already proved\", \"re\u2011derive\"; FM\u20111.5 \u2192 \"still working\", \"continue after completion\", \"task completed\"; FM\u20112.6 \u2192 \"but I did\", \"instead of\", \"contradicts\" etc.). Run re.search for each pattern on the prepared trace; if any match is found, set that FM to true in a provisional result dict. Pass this provisional dict to the LLM as a short pre\u2011amble (e.g., \"Pre\u2011detected hints: {pre_dict}\") so the model can confirm or override, then merge the final JSON output with the pre\u2011detections using logical OR. This boosts recall for obvious cues while letting the model handle nuanced cases.",
+        "what_to_optimize": "Recall for obvious failure cues, especially FM\u20111.3, FM\u20111.5, FM\u20112.6; overall macro\u2011F1",
+        "cautions": "Keep the pattern list concise to avoid over\u2011triggering false positives; use word boundaries and case\u2011insensitive flags. Ensure the pre\u2011amble does not exceed the model's token limit. Merge results with logical OR to preserve any true label from either source.",
+        "approach_type": "re.search",
+        "uses": 2,
+        "starting_score": 0.3169,
+        "ending_score": 0.3169,
+        "score_improvement": 0.0,
+        "outcome": "FAILED"
+      }
+    ],
+    "best_score_at_paradigm_gen": 0.3169,
+    "best_score_during_paradigm": 0.3402
+  }
+}

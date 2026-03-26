@@ -20,6 +20,45 @@ from optpilot.models import FMLabel, FMLocalization, FMProfile, MASTrace
 FULL_TRACE_THRESHOLD = 15000  # ~4K tokens
 
 
+SHORT_CLASSIFICATION_PROMPT = """\
+You are a multi-agent system (MAS) fault diagnosis expert. Analyze this MAS execution trace for the following 14 failure modes. For each, answer yes or no.
+
+## Failure Mode Definitions
+
+**Category 1 - Agent Compliance:**
+1.1 Disobey Task Specification: Agent fails to follow task constraints or requirements.
+1.2 Disobey Role Specification: Agent neglects its defined role, performs actions outside its scope.
+1.3 Step Repetition: Unnecessary duplication of already-completed work — re-deriving the same result, re-running the same analysis, or repeating the same reasoning without new information.
+1.4 Loss of Conversation History: Agent loses track of prior context, reintroduces resolved issues.
+1.5 Unaware of Termination: Agent doesn't know when to stop, continues past task completion.
+
+**Category 2 - Inter-Agent Communication:**
+2.1 Conversation Reset: Dialogue unexpectedly restarts, losing prior progress.
+2.2 Fail to Ask Clarification: Agent proceeds despite ambiguous or incomplete information.
+2.3 Task Derailment: Agent deviates from the original task objective.
+2.4 Information Withholding: Agent fails to share critical information with other agents.
+2.5 Ignored Other Agent's Input: Agent disregards input from other agents.
+2.6 Action-Reasoning Mismatch: Agent's stated reasoning doesn't match its actual actions/output.
+
+**Category 3 - Verification:**
+3.1 Premature Termination: Task ends before objectives are fully met.
+3.2 No or Incorrect Verification: Verification absent or reaches wrong conclusions.
+3.3 Weak Verification: Verification exists but is superficial, misses errors.
+
+## Trace
+{trace_content}
+
+Respond with ONLY a JSON object. For each FM, true if present, false if not:
+
+{{
+    "1.1": <true/false>, "1.2": <true/false>, "1.3": <true/false>,
+    "1.4": <true/false>, "1.5": <true/false>,
+    "2.1": <true/false>, "2.2": <true/false>, "2.3": <true/false>,
+    "2.4": <true/false>, "2.5": <true/false>, "2.6": <true/false>,
+    "3.1": <true/false>, "3.2": <true/false>, "3.3": <true/false>
+}}"""
+
+
 CLASSIFICATION_PROMPT = """\
 Below I will provide a multiagent system trace. Provide me an analysis of the failure modes and inefficiencies as I will say below.
 In the traces, analyze the system behaviour. There are several failure modes in multiagent systems I identified. I will provide them below. Tell me if you encounter any of them, as a binary yes or no.
@@ -49,7 +88,7 @@ C. Whether you encounter any of the failure modes or inefficiencies:
 @@*** end of your answer ***
 
 An example answer is:
-A. The task is not completed due to disobeying role specification as agents went rogue and did not follow the task specification.
+A. The task is not completed due to disobeying role specification as agents went rogue and started to chat with each other instead of completing the task. Agents derailed and verifier is not strong enough to detect it.
 B. no
 C.
 1.1 no
@@ -59,13 +98,13 @@ C.
 1.5 no
 2.1 no
 2.2 no
-2.3 no
+2.3 yes
 2.4 no
 2.5 no
 2.6 no
 3.1 no
 3.2 no
-3.3 no
+3.3 yes
 
 Here is the trace:
 {trace_content}
@@ -284,61 +323,72 @@ class Diagnoser:
 
     def classify_fm(
         self, trace: MASTrace, fm_id: str, model: str | None = None,
+        prompt_style: str = "mast",
     ) -> bool:
-        """Classify whether a trace exhibits a specific FM using MAST prompt. Returns True/False."""
-        trace_content = _prepare_trace_content(trace.trajectory)
-        prompt = CLASSIFICATION_PROMPT.format(trace_content=trace_content)
-        try:
-            kwargs = {}
-            if model:
-                kwargs["model"] = model
-            response = call_llm(
-                [{"role": "user", "content": prompt}],
-                max_tokens=8192,
-                **kwargs,
-            )
-            return _parse_fm_from_mast_response(response, fm_id)
-        except Exception as e:
-            print(f"  Warning: classify_fm failed for trace {trace.trace_id}: {e}")
-            return False
+        """Classify whether a trace exhibits a specific FM. Returns True/False."""
+        result = self.classify_all_fms(trace, model=model, prompt_style=prompt_style)
+        return result.get(fm_id, False)
 
     def classify_all_fms(
         self, trace: MASTrace, model: str | None = None,
+        prompt_style: str = "mast",
     ) -> dict[str, bool]:
-        """Classify all 14 FMs for a trace in a single LLM call. Returns {fm_id: bool}."""
+        """Classify all 14 FMs for a trace in a single LLM call.
+
+        Args:
+            prompt_style: "mast" for MAST original prompt, "short" for optimized short prompt.
+        """
         trace_content = _prepare_trace_content(trace.trajectory)
-        prompt = CLASSIFICATION_PROMPT.format(trace_content=trace_content)
+        kwargs = {}
+        if model:
+            kwargs["model"] = model
+
         try:
-            kwargs = {}
-            if model:
-                kwargs["model"] = model
-            response = call_llm(
-                [{"role": "user", "content": prompt}],
-                max_tokens=8192,
-                **kwargs,
-            )
-            return _parse_all_fms_from_mast_response(response)
+            if prompt_style == "short":
+                prompt = SHORT_CLASSIFICATION_PROMPT.format(trace_content=trace_content)
+                result = call_llm_json(
+                    [{"role": "user", "content": prompt}],
+                    max_tokens=4096,
+                    **kwargs,
+                )
+                return {
+                    fm_id: bool(result.get(fm_id, False))
+                    for fm_id in _ALL_FM_IDS
+                }
+            else:
+                prompt = CLASSIFICATION_PROMPT.format(trace_content=trace_content)
+                response = call_llm(
+                    [{"role": "user", "content": prompt}],
+                    max_tokens=8192,
+                    **kwargs,
+                )
+                return _parse_all_fms_from_mast_response(response)
         except Exception as e:
             print(f"  Warning: classify_all_fms failed for trace {trace.trace_id}: {e}")
             return {}
 
     def classify_batch(
         self, traces: list[MASTrace], fm_id: str, model: str | None = None,
+        prompt_style: str = "mast",
     ) -> None:
         """Classify FM for multiple traces, mutating trace.mast_annotation in-place."""
         if not traces:
             return
 
+        def _classify_one(trace: MASTrace) -> dict[str, bool]:
+            return self.classify_all_fms(trace, model=model, prompt_style=prompt_style)
+
         with ThreadPoolExecutor(max_workers=min(self.max_workers, len(traces))) as pool:
-            futures = {
-                pool.submit(self.classify_fm, t, fm_id, model): i
-                for i, t in enumerate(traces)
-            }
+            futures = {pool.submit(_classify_one, t): i for i, t in enumerate(traces)}
             for fut in as_completed(futures):
                 idx = futures[fut]
                 try:
-                    present = fut.result()
-                    traces[idx].mast_annotation[fm_id] = 1 if present else 0
+                    all_fms = fut.result()
+                    # Write all classified FMs, but ensure the requested fm_id is set
+                    for fid, present in all_fms.items():
+                        traces[idx].mast_annotation[fid] = 1 if present else 0
+                    if fm_id not in traces[idx].mast_annotation:
+                        traces[idx].mast_annotation[fm_id] = 0
                 except Exception as e:
                     print(f"  Warning: classify_batch failed for trace index {idx}: {e}")
                     traces[idx].mast_annotation[fm_id] = 0

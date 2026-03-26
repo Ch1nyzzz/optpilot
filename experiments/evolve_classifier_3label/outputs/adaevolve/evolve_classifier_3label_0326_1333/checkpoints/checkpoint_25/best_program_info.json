@@ -1,0 +1,50 @@
+{
+  "id": "3ca82016-212e-41bd-9735-f1d86174c136",
+  "generation": 3,
+  "iteration": 8,
+  "current_iteration": 25,
+  "metrics": {
+    "status": "success",
+    "combined_score": 0.5669,
+    "exact_match_accuracy": 0.2833,
+    "label_accuracy": 0.5778,
+    "metrics": {
+      "C1": {
+        "f1": 0.6129,
+        "precision": 0.7308,
+        "recall": 0.5278,
+        "tp": 19,
+        "fp": 7,
+        "fn": 17,
+        "tn": 17,
+        "support": 36
+      },
+      "C2": {
+        "f1": 0.4561,
+        "precision": 0.5417,
+        "recall": 0.3939,
+        "tp": 13,
+        "fp": 11,
+        "fn": 20,
+        "tn": 16,
+        "support": 33
+      },
+      "C3": {
+        "f1": 0.6316,
+        "precision": 0.5806,
+        "recall": 0.6923,
+        "tp": 18,
+        "fp": 13,
+        "fn": 8,
+        "tn": 21,
+        "support": 26
+      }
+    },
+    "artifacts": {
+      "feedback": "Macro-F1: 0.5669\nExact-match accuracy: 0.2833\nLabel accuracy: 0.5778\n\nCAT      F1      P      R   TP   FP   FN  sup\n----------------------------------------------\nC1    0.613  0.731  0.528   19    7   17   36\nC2    0.456  0.542  0.394   13   11   20   33\nC3    0.632  0.581  0.692   18   13    8   26\n\nWorst categories:\n  C2: F1=0.456 (TP=13, FP=11, FN=20)\n  C1: F1=0.613 (TP=19, FP=7, FN=17)\n  C3: F1=0.632 (TP=18, FP=13, FN=8)"
+    }
+  },
+  "language": "python",
+  "timestamp": 1774546653.193467,
+  "saved_at": 1774547431.7387462
+}

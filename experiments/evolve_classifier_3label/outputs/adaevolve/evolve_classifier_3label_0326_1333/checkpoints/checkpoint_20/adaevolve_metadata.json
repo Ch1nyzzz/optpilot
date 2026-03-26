@@ -1,0 +1,294 @@
+{
+  "num_islands": 2,
+  "current_island": 0,
+  "iteration_count": 19,
+  "global_best_score": 0.5669,
+  "decay": 0.9,
+  "intensity_min": 0.15,
+  "intensity_max": 0.5,
+  "migration_interval": 10,
+  "diversity_strategy_type": "code",
+  "use_unified_archive": true,
+  "use_adaptive_search": true,
+  "use_ucb_selection": true,
+  "fixed_intensity": 0.4,
+  "adapter": {
+    "states": [
+      {
+        "accumulated_signal": 0.11480106158648115,
+        "best_score": 0.5669,
+        "improvement_count": 3,
+        "total_evaluations": 12,
+        "decay": 0.9,
+        "epsilon": 1e-08,
+        "intensity_min": 0.15,
+        "intensity_max": 0.5
+      },
+      {
+        "accumulated_signal": 0.1528702484949642,
+        "best_score": 0.5669,
+        "improvement_count": 1,
+        "total_evaluations": 10,
+        "decay": 0.9,
+        "epsilon": 1e-08,
+        "intensity_min": 0.15,
+        "intensity_max": 0.5
+      }
+    ],
+    "dimension_visits": [
+      12,
+      10
+    ],
+    "dimension_rewards": [
+      0.7096750272747401,
+      0.2357689348073922
+    ],
+    "decayed_visits": [
+      7.175704635190001,
+      6.5132155990000005
+    ],
+    "global_best_score": 0.5669,
+    "ucb_exploration": 1.41,
+    "min_visits": 3,
+    "decay": 0.9,
+    "epsilon": 1e-08
+  },
+  "island_config_names": [
+    "balanced",
+    "balanced"
+  ],
+  "islands": [
+    [
+      "3e7684eb-ba6c-4b9e-9d32-327aee19f1d8",
+      "213acd67-97f2-44d5-a139-15020cca79d2",
+      "ce7f8046-b44c-4cb3-bd20-0c1cae9b63cb",
+      "35da872d-c1e1-4788-829d-6c0326a89f00",
+      "a7c4db4c-d31d-4c02-9183-2047fe89fa79",
+      "3ca82016-212e-41bd-9735-f1d86174c136",
+      "46c409de-00e2-4452-8460-06f65438f618",
+      "af0e34c6-74ab-4da4-b240-1ac724b87a8d",
+      "aaede147-cb43-4aae-ba25-1bc17b212385",
+      "135c4672-e438-4b41-99be-89550db58b60",
+      "59d81741-6900-4609-8ca4-b3f70c1a12b7",
+      "ae388180-5572-4eaa-8134-8ba6024bbde1"
+    ],
+    [
+      "933e02a9-a0af-4c4d-b16b-3b7141eda8c7",
+      "5dedb090-5b45-4fba-b79a-fdf6e559f64c",
+      "a0a61e1c-ddab-4a23-95e7-0e289d68da8a",
+      "68398fea-11ea-4d13-b2f8-689ddfe54a4b",
+      "93bb952c-05c1-4612-95c7-83460ee251e8",
+      "82bff3a6-ecff-449b-8bfa-91a3d6703484",
+      "ef82fa59-e58f-4d46-b6a0-a00b545343e1",
+      "4032b8e0-ef4d-4527-85ae-120a2dfa3cd3",
+      "49ba35a9-ee44-41e6-a921-bd02685eab52",
+      "58bbf8a8-c18d-42cc-b43a-372bc68198a3",
+      "24771f43-4633-4be0-8d76-9951ebd3e367",
+      "f9a09e4a-a5e0-46f6-b3a9-afcae472975c",
+      "87e9a792-da0c-4eff-a365-e22a1e6a3480"
+    ]
+  ],
+  "archive_genealogies": [
+    {
+      "parents": {
+        "3e7684eb-ba6c-4b9e-9d32-327aee19f1d8": [],
+        "213acd67-97f2-44d5-a139-15020cca79d2": [
+          "3e7684eb-ba6c-4b9e-9d32-327aee19f1d8"
+        ],
+        "ce7f8046-b44c-4cb3-bd20-0c1cae9b63cb": [
+          "3e7684eb-ba6c-4b9e-9d32-327aee19f1d8"
+        ],
+        "35da872d-c1e1-4788-829d-6c0326a89f00": [
+          "3e7684eb-ba6c-4b9e-9d32-327aee19f1d8"
+        ],
+        "a7c4db4c-d31d-4c02-9183-2047fe89fa79": [
+          "35da872d-c1e1-4788-829d-6c0326a89f00"
+        ],
+        "3ca82016-212e-41bd-9735-f1d86174c136": [
+          "a7c4db4c-d31d-4c02-9183-2047fe89fa79"
+        ],
+        "46c409de-00e2-4452-8460-06f65438f618": [
+          "93bb952c-05c1-4612-95c7-83460ee251e8"
+        ],
+        "af0e34c6-74ab-4da4-b240-1ac724b87a8d": [
+          "3ca82016-212e-41bd-9735-f1d86174c136"
+        ],
+        "aaede147-cb43-4aae-ba25-1bc17b212385": [
+          "3ca82016-212e-41bd-9735-f1d86174c136"
+        ],
+        "135c4672-e438-4b41-99be-89550db58b60": [
+          "3ca82016-212e-41bd-9735-f1d86174c136"
+        ],
+        "59d81741-6900-4609-8ca4-b3f70c1a12b7": [
+          "3ca82016-212e-41bd-9735-f1d86174c136"
+        ],
+        "ae388180-5572-4eaa-8134-8ba6024bbde1": [
+          "3ca82016-212e-41bd-9735-f1d86174c136"
+        ]
+      },
+      "children": {
+        "3e7684eb-ba6c-4b9e-9d32-327aee19f1d8": [
+          "213acd67-97f2-44d5-a139-15020cca79d2",
+          "ce7f8046-b44c-4cb3-bd20-0c1cae9b63cb",
+          "35da872d-c1e1-4788-829d-6c0326a89f00"
+        ],
+        "35da872d-c1e1-4788-829d-6c0326a89f00": [
+          "a7c4db4c-d31d-4c02-9183-2047fe89fa79"
+        ],
+        "a7c4db4c-d31d-4c02-9183-2047fe89fa79": [
+          "3ca82016-212e-41bd-9735-f1d86174c136"
+        ],
+        "93bb952c-05c1-4612-95c7-83460ee251e8": [
+          "46c409de-00e2-4452-8460-06f65438f618"
+        ],
+        "3ca82016-212e-41bd-9735-f1d86174c136": [
+          "af0e34c6-74ab-4da4-b240-1ac724b87a8d",
+          "aaede147-cb43-4aae-ba25-1bc17b212385",
+          "135c4672-e438-4b41-99be-89550db58b60",
+          "59d81741-6900-4609-8ca4-b3f70c1a12b7",
+          "ae388180-5572-4eaa-8134-8ba6024bbde1"
+        ]
+      }
+    },
+    {
+      "parents": {
+        "933e02a9-a0af-4c4d-b16b-3b7141eda8c7": [],
+        "5dedb090-5b45-4fba-b79a-fdf6e559f64c": [
+          "933e02a9-a0af-4c4d-b16b-3b7141eda8c7"
+        ],
+        "a0a61e1c-ddab-4a23-95e7-0e289d68da8a": [
+          "5dedb090-5b45-4fba-b79a-fdf6e559f64c"
+        ],
+        "68398fea-11ea-4d13-b2f8-689ddfe54a4b": [
+          "5dedb090-5b45-4fba-b79a-fdf6e559f64c"
+        ],
+        "93bb952c-05c1-4612-95c7-83460ee251e8": [
+          "933e02a9-a0af-4c4d-b16b-3b7141eda8c7"
+        ],
+        "82bff3a6-ecff-449b-8bfa-91a3d6703484": [
+          "93bb952c-05c1-4612-95c7-83460ee251e8"
+        ],
+        "ef82fa59-e58f-4d46-b6a0-a00b545343e1": [
+          "3ca82016-212e-41bd-9735-f1d86174c136"
+        ],
+        "4032b8e0-ef4d-4527-85ae-120a2dfa3cd3": [
+          "35da872d-c1e1-4788-829d-6c0326a89f00"
+        ],
+        "49ba35a9-ee44-41e6-a921-bd02685eab52": [
+          "82bff3a6-ecff-449b-8bfa-91a3d6703484"
+        ],
+        "58bbf8a8-c18d-42cc-b43a-372bc68198a3": [
+          "a0a61e1c-ddab-4a23-95e7-0e289d68da8a"
+        ],
+        "24771f43-4633-4be0-8d76-9951ebd3e367": [
+          "58bbf8a8-c18d-42cc-b43a-372bc68198a3"
+        ],
+        "f9a09e4a-a5e0-46f6-b3a9-afcae472975c": [
+          "3ca82016-212e-41bd-9735-f1d86174c136"
+        ],
+        "87e9a792-da0c-4eff-a365-e22a1e6a3480": [
+          "3ca82016-212e-41bd-9735-f1d86174c136"
+        ]
+      },
+      "children": {
+        "933e02a9-a0af-4c4d-b16b-3b7141eda8c7": [
+          "5dedb090-5b45-4fba-b79a-fdf6e559f64c",
+          "93bb952c-05c1-4612-95c7-83460ee251e8"
+        ],
+        "5dedb090-5b45-4fba-b79a-fdf6e559f64c": [
+          "a0a61e1c-ddab-4a23-95e7-0e289d68da8a",
+          "68398fea-11ea-4d13-b2f8-689ddfe54a4b"
+        ],
+        "93bb952c-05c1-4612-95c7-83460ee251e8": [
+          "82bff3a6-ecff-449b-8bfa-91a3d6703484"
+        ],
+        "3ca82016-212e-41bd-9735-f1d86174c136": [
+          "ef82fa59-e58f-4d46-b6a0-a00b545343e1",
+          "f9a09e4a-a5e0-46f6-b3a9-afcae472975c",
+          "87e9a792-da0c-4eff-a365-e22a1e6a3480"
+        ],
+        "35da872d-c1e1-4788-829d-6c0326a89f00": [
+          "4032b8e0-ef4d-4527-85ae-120a2dfa3cd3"
+        ],
+        "82bff3a6-ecff-449b-8bfa-91a3d6703484": [
+          "49ba35a9-ee44-41e6-a921-bd02685eab52"
+        ],
+        "a0a61e1c-ddab-4a23-95e7-0e289d68da8a": [
+          "58bbf8a8-c18d-42cc-b43a-372bc68198a3"
+        ],
+        "58bbf8a8-c18d-42cc-b43a-372bc68198a3": [
+          "24771f43-4633-4be0-8d76-9951ebd3e367"
+        ]
+      }
+    }
+  ],
+  "use_dynamic_islands": true,
+  "max_islands": 4,
+  "last_spawn_iteration": -15,
+  "use_paradigm_breakthrough": true,
+  "paradigm_tracker": {
+    "window_size": 8,
+    "improvement_threshold": 0.1,
+    "max_paradigm_uses": 2,
+    "max_tried_paradigms": 8,
+    "num_paradigms_to_generate": 2,
+    "improvement_history": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "active_paradigms": [
+      {
+        "idea": "Add few\u2011shot exemplars to the classification prompt so the LLM sees concrete labeled traces before the target trace.",
+        "description": "Create a small library of 3\u20134 short example traces (\u2248200\u202ftokens each) that cover all combinations of C1, C2, C3 (e.g., only C1, C1+C2, C2+C3, all three). For each example include the exact JSON output. Insert these examples at the top of CLASSIFICATION_PROMPT, followed by a clear separator and the target trace. Keep the total prompt under the model\u2019s token limit by trimming the target trace as before. The LLM will then mimic the demonstrated format and learn the boundary cues for each category, leading to more consistent boolean predictions.",
+        "what_to_optimize": "macro\u2011F1, exact\u2011match accuracy, label accuracy",
+        "cautions": "Make sure the combined prompt length stays below the model\u2019s context window; use concise examples; verify that the JSON extraction regex still works with the added examples; avoid duplicate category wording that could confuse the model.",
+        "approach_type": "openai.ChatCompletion.create"
+      },
+      {
+        "idea": "Introduce a rule\u2011based keyword/regex fallback that scans the trace for category\u2011specific indicator phrases and sets the booleans before optionally consulting the LLM for verification.",
+        "description": "Define three keyword lists (one per category) containing high\u2011precision phrases such as \"ignores constraints\" or \"role violation\" for C1, \"conversation reset\" or \"no clarification\" for C2, and \"premature termination\" or \"missing verification\" for C3. Compile each list into a case\u2011insensitive regular expression using re.compile and run them on the (trimmed) trace. The presence of any match sets the corresponding label to True. If no keyword is found for a category, optionally call the LLM with a shortened prompt that includes the already\u2011detected labels as context, letting the model confirm or correct them. Return the final boolean map.",
+        "what_to_optimize": "reduce false positives/negatives, improve label accuracy and overall macro\u2011F1",
+        "cautions": "Curate the keyword lists carefully to avoid over\u2011general matches; limit regex scans to the trimmed trace to keep runtime low; ensure the fallback LLM call does not exceed token limits; handle cases where multiple keywords appear for the same category gracefully.",
+        "approach_type": "re.compile"
+      }
+    ],
+    "paradigm_usage_counts": {
+      "0": 1
+    },
+    "current_paradigm_index": 1,
+    "tried_paradigms": [
+      {
+        "idea": "Enrich the prompt with few\u2011shot examples and explicit keyword cues for each category, and ask the model to reason step\u2011by\u2011step before outputting the JSON.",
+        "description": "Rewrite CLASSIFICATION_PROMPT to start with a short system\u2011style description, then provide 2\u20133 miniature trace excerpts that illustrate a positive and a negative case for C1, C2, and C3. After the examples, ask the model to first list the evidence it sees for each category (a one\u2011sentence bullet list) and finally to return ONLY a JSON object with keys C1, C2, C3. This chain\u2011of\u2011thought format guides the LLM to focus on the exact patterns that define the coarse FM categories and reduces hallucination. Keep the trimming logic unchanged; only the prompt text changes. The rest of the code (llm_call, JSON extraction) stays the same.",
+        "what_to_optimize": "Increase macro\u2011F1 by improving recall and precision for each label through clearer instruction and concrete exemplars.",
+        "cautions": "Make sure the examples are short enough to fit within the token budget after trimming; avoid stray commas or extra braces that could break JSON parsing. Use deterministic temperature (the default model is deterministic), and keep the final JSON on a single line so the regex extractor finds it reliably.",
+        "approach_type": "prompt_engineering.enhanced_few_shot",
+        "uses": 2,
+        "starting_score": 0.5669,
+        "ending_score": 0.5669,
+        "score_improvement": 0.0,
+        "outcome": "FAILED"
+      },
+      {
+        "idea": "Apply a self\u2011consistency ensemble: call the LLM three times per trace with the same prompt, collect the three JSON outputs, and take the majority vote for each label using statistics.mode.",
+        "description": "Wrap the existing classify function in a new wrapper that repeats llm_call three times (or an odd number) and parses each response into a dict. Then, for each key C1\u2011C3, feed the three boolean values to statistics.mode to obtain the majority decision. Return the aggregated dict as the final prediction. This reduces random mis\u2011classifications caused by occasional token\u2011level noise while keeping the same prompt and trimming logic.",
+        "what_to_optimize": "Boost label accuracy and macro\u2011F1 by lowering false positives/negatives through majority voting.",
+        "cautions": "The LLM model used (gpt\u2011oss\u2011120b) is largely deterministic, but temperature\u2011like sampling may still produce variation; ensure the wrapper respects any rate limits (use a short sleep between calls if needed). If all three calls return different values (e.g., [True, False, False]), statistics.mode will raise a StatisticsError \u2013 handle this by falling back to the first response or using the most common value via collections.Counter.",
+        "approach_type": "statistics.mode",
+        "uses": 2,
+        "starting_score": 0.5669,
+        "ending_score": 0.5669,
+        "score_improvement": 0.0,
+        "outcome": "FAILED"
+      }
+    ],
+    "best_score_at_paradigm_gen": 0.5669,
+    "best_score_during_paradigm": 0.5669
+  }
+}

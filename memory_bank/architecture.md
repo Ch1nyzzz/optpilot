@@ -169,3 +169,13 @@ this file. Examples include:
 - adding new top-level directories
 - changing the system decomposition or interface boundaries
 - introducing new storage, evaluation, or workflow components
+
+## Experiment Variants (2026-03-26)
+
+The repository now keeps two separate prompt-optimization experiment variants under `experiments/`:
+- `experiments/evolve_classifier/`: fine-grained 14-label FM prediction
+- `experiments/evolve_classifier_3label/`: coarse 3-label multi-label prediction (`C1/C2/C3`)
+
+The 3-label variant reuses the same trace dataset as the 14-label variant but applies a
+different evaluator and output schema. This keeps coarse-category experiments isolated
+from the fine-grained setup while avoiding duplicate label files.
