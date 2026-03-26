@@ -94,6 +94,7 @@ def run_accumulation(fm_id: str = "1.3", batch_size: int = 10, dag_path: str | N
 
     out_path = RESULTS_DIR / f"exp3_accumulation_fm{fm_id}.json"
     out_path.write_text(json.dumps(batch_results, indent=2))
+    library.flush()
     tracker.save_local(f"exp3_fm{fm_id}.json")
     print(f"Results saved to {out_path}")
 

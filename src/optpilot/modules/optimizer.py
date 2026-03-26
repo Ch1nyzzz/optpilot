@@ -1,9 +1,11 @@
 """Optimizer - generates repair candidates by retrieving skills from library or generating new ones.
 
-Retrieval: fm_id 粗筛 → LLM 看 root_cause 匹配最佳 skill → 适配或生成新方案。
+Retrieval: fm_id coarse filter → LLM matches best skill by root_cause → adapt or generate new plan.
 """
 
 from __future__ import annotations
+
+from collections import Counter
 
 from optpilot.dag.core import MASDAG
 from optpilot.data.fm_taxonomy import FM_DEFINITIONS
@@ -13,103 +15,73 @@ from optpilot.models import (
     FMProfile, MASTrace, RepairAction, RepairCandidate, RepairEntry, RepairType,
 )
 
-SKILL_MATCH_PROMPT = """你是一个 MAS 修复专家。根据当前故障的 root cause，从已有的 skill 库中选择最匹配的 skill。
+SKILL_MATCH_PROMPT = """\
+You are a MAS repair expert. Match the current fault's root cause to the best skill from the library.
 
-## 当前故障
+## Current Fault
 - FM-{fm_id}: {fm_name}
-- Agent: {agent}
-- Root Cause: {root_cause}
+{fault_summary}
 
-## 可用 Skills
+## Available Skills
 {skills_text}
 
-请判断哪个 skill 最适用于当前故障。输出 JSON:
+Select the best matching skill. Respond with ONLY a JSON object:
 
 {{
-    "matched_skill_id": "最匹配的 skill 编号 (如 '1')，如果没有合适的则填 'none'",
-    "match_reason": "为什么选择这个 skill (一句话)",
-    "confidence": 0.0-1.0
+    "matched_skill_id": "<skill number (e.g. '1'), or 'none' if no good match>",
+    "match_reason": "<one sentence explaining the match>",
+    "confidence": <float 0.0-1.0>
 }}"""
 
-REPAIR_GENERATION_PROMPT = """你是一个多智能体系统 (MAS) 架构优化专家。
+REPAIR_GENERATION_PROMPT = """\
+You are a multi-agent system (MAS) architecture optimizer.
 
-根据以下诊断结果，生成具体的修复方案。
+Generate a targeted repair plan based on the diagnosis below.
 
-## 故障信息
-- FM-{fm_id}: {fm_name}
-- 定义: {fm_description}
-- 出错 Agent: {agent}
-- 出错 Step: {step}
-- Root Cause: {root_cause}
+## Fault
+- FM-{fm_id}: {fm_name} -- {fm_description}
+{fault_summary}
 
-## MAS 架构信息
+## MAS Architecture
 {mas_context}
+{skills_section}
+## Editable Parts
+- node_mutation: update an existing node's role, prompt, or model config
+- node_add: add a new node when the workflow is missing a role such as verifier, planner, or reviewer
+- node_delete: remove a redundant or harmful node
+- edge_mutation: change edge conditions, trigger behavior, or data-carrying behavior
+- edge_rewire: change which node sends to or receives from which other node
+- config_change: adjust loop limits, timeouts, or node-level parameters
 
-## 可用修复操作类型
-1. node_mutation: 修改 agent 的 prompt 或配置
-2. node_add: 增加新 agent
-3. node_delete: 删除冗余 agent
-4. edge_mutation: 修改通信协议或终止条件
-5. config_change: 修改循环次数、超时等配置
+Choose the smallest repair that directly addresses the diagnosed root cause.
+If you add a node, explain its responsibility and include how it connects to the graph.
+If you change a loop, explain both the continue condition and the exit condition.
 
-请生成一个针对性的修复方案。输出严格 JSON 格式:
+Respond with ONLY a JSON object:
 
 {{
-    "description": "修复方案的高层描述 (一句话)",
+    "description": "<one-sentence summary of the repair>",
+    "used_skill": <true if referencing a skill above, false otherwise>,
     "actions": [
         {{
-            "repair_type": "操作类型 (上述5种之一)",
-            "target": "目标 agent 或配置项",
-            "description": "具体修改描述",
+            "repair_type": "<one of: node_mutation, node_add, node_delete, edge_mutation, edge_rewire, config_change>",
+            "target": "<target agent or config key>",
+            "description": "<what to change>",
             "details": {{}},
-            "rationale": "为什么这个修改能解决问题"
+            "rationale": "<why this fixes the fault>"
         }}
     ],
-    "confidence": 0.0-1.0
+    "confidence": <float 0.0-1.0>
 }}"""
 
-REPAIR_WITH_SKILL_PROMPT = """你是一个多智能体系统 (MAS) 架构优化专家。
-
-根据以下诊断结果，生成具体的修复方案。可以参考已有的 skill（但不必照搬，根据实际情况决定是否采用、部分采用或完全另起方案）。
-
-## 故障信息
-- FM-{fm_id}: {fm_name}
-- 定义: {fm_description}
-- 出错 Agent: {agent}
-- 出错 Step: {step}
-- Root Cause: {root_cause}
-
-## MAS 架构信息
-{mas_context}
-
-## 参考 Skill（仅供参考）
-- Pattern: {skill_pattern}
-- 方案: {skill_description}
-- 操作: {skill_actions}
-
-## 可用修复操作类型
-1. node_mutation: 修改 agent 的 prompt 或配置
-2. node_add: 增加新 agent
-3. node_delete: 删除冗余 agent
-4. edge_mutation: 修改通信协议或终止条件
-5. config_change: 修改循环次数、超时等配置
-
-请生成针对性的修复方案。输出严格 JSON 格式:
-
-{{
-    "description": "修复方案的高层描述 (一句话)",
-    "used_skill": true/false,
-    "actions": [
-        {{
-            "repair_type": "操作类型 (上述5种之一)",
-            "target": "目标 agent 或配置项",
-            "description": "具体修改描述",
-            "details": {{}},
-            "rationale": "为什么这个修改能解决问题"
-        }}
-    ],
-    "confidence": 0.0-1.0
-}}"""
+SKILLS_SECTION_TEMPLATE = """
+## Reference Skill (for guidance only -- adapt, partially use, or ignore as appropriate)
+- Apply when: {skill_pattern}
+- Avoid when: {when_not_to_use}
+- Preferred actions: {skill_description}
+- Representative actions: {skill_actions}
+- Avoid actions: {avoid_actions}
+"""
 
 
 class Optimizer:
@@ -121,39 +93,45 @@ class Optimizer:
     def generate_repair(
         self,
         fm_id: str,
-        profile: FMProfile,
-        trace: MASTrace,
+        profile: FMProfile | list[FMProfile],
+        trace: MASTrace | list[MASTrace],
         dag: MASDAG | None = None,
     ) -> RepairCandidate:
         """Generate a repair candidate for the given FM.
 
-        1. fm_id 粗筛 library 中同 FM 的 skills
-        2. LLM 看当前 root_cause 匹配最佳 skill
-        3. 匹配到 → 适配该 skill
-        4. 没匹配到 → 生成全新方案
+        1. Coarse filter: find library skills for the same FM
+        2. LLM matches best skill by root_cause
+        3. Match found → adapt the skill
+        4. No match → generate from scratch
         """
-        # 1. 粗筛
-        candidates = self.library.search(fm_id, mas_name=trace.mas_name)
+        traces, profiles = self._normalize_inputs(trace, profile)
+        primary_trace = traces[0]
+
+        # 1. Coarse filter
+        candidates = self.library.search(fm_id, mas_name=primary_trace.mas_name)
         if not candidates:
-            print(f"  Library 无 FM-{fm_id} 的 skill，生成新方案...")
-            return self._generate_new(fm_id, profile, trace, dag)
+            print(f"  No library skills for FM-{fm_id}, generating new repair...")
+            return self._generate_new(fm_id, profiles, traces, dag)
 
-        # 2. LLM 匹配最相关 skill
-        matched = self._match_skill(fm_id, profile, candidates)
+        # 2. LLM match
+        matched = self._match_skill(fm_id, profiles, traces, candidates)
         if matched:
-            print(f"  参考 skill [{matched.entry_id}]: {matched.root_cause_pattern[:60]}")
-            return self._generate_with_skill(matched, fm_id, profile, trace, dag)
+            print(f"  Referencing skill [{matched.entry_id}]: {matched.root_cause_pattern[:60]}")
+            return self._generate_with_skill(matched, fm_id, profiles, traces, dag)
 
-        # 3. 无匹配，从头生成
-        print(f"  Library 有 {len(candidates)} 条 skill 但无匹配，生成新方案...")
-        return self._generate_new(fm_id, profile, trace, dag)
+        # 3. No match
+        print(f"  Library has {len(candidates)} skills but none matched, generating new repair...")
+        return self._generate_new(fm_id, profiles, traces, dag)
 
     def _match_skill(
-        self, fm_id: str, profile: FMProfile, candidates: list[RepairEntry],
+        self,
+        fm_id: str,
+        profiles: list[FMProfile],
+        traces: list[MASTrace],
+        candidates: list[RepairEntry],
     ) -> RepairEntry | None:
         """Use LLM to match current root cause against library skills."""
         fm_info = FM_DEFINITIONS[fm_id]
-        loc = profile.localization.get(fm_id)
 
         skills_text = "\n".join(
             f"Skill {i+1} (id={e.entry_id}): {e.root_cause_pattern} "
@@ -164,8 +142,7 @@ class Optimizer:
         prompt = SKILL_MATCH_PROMPT.format(
             fm_id=fm_id,
             fm_name=fm_info["name"],
-            agent=loc.agent if loc else "unknown",
-            root_cause=loc.root_cause if loc else "unknown",
+            fault_summary=self._build_fault_summary(fm_id, profiles, traces),
             skills_text=skills_text,
         )
 
@@ -190,28 +167,35 @@ class Optimizer:
         return None
 
     def _generate_with_skill(
-        self, skill: RepairEntry, fm_id: str, profile: FMProfile,
-        trace: MASTrace, dag: MASDAG | None,
+        self,
+        skill: RepairEntry,
+        fm_id: str,
+        profiles: list[FMProfile],
+        traces: list[MASTrace],
+        dag: MASDAG | None,
     ) -> RepairCandidate:
         """Generate repair with a matched skill as reference (not forced)."""
         fm_info = FM_DEFINITIONS[fm_id]
-        loc = profile.localization.get(fm_id)
 
         skill_actions = "; ".join(
             a.description for a in (skill.candidate.actions if skill.candidate else [])
         )
 
-        prompt = REPAIR_WITH_SKILL_PROMPT.format(
+        skills_section = SKILLS_SECTION_TEMPLATE.format(
+            skill_pattern=skill.root_cause_pattern,
+            when_not_to_use=skill.when_not_to_use or "none recorded",
+            skill_description=skill.candidate.description if skill.candidate else "",
+            skill_actions=skill_actions,
+            avoid_actions=", ".join(skill.avoid_actions) if skill.avoid_actions else "none recorded",
+        )
+
+        prompt = REPAIR_GENERATION_PROMPT.format(
             fm_id=fm_id,
             fm_name=fm_info["name"],
             fm_description=fm_info["description"],
-            agent=loc.agent if loc else "unknown",
-            step=loc.step if loc else "unknown",
-            root_cause=loc.root_cause if loc else "unknown",
-            mas_context=self._get_mas_context(trace, dag),
-            skill_pattern=skill.root_cause_pattern,
-            skill_description=skill.candidate.description if skill.candidate else "",
-            skill_actions=skill_actions,
+            fault_summary=self._build_fault_summary(fm_id, profiles, traces),
+            mas_context=self._get_mas_context(traces[0], dag),
+            skills_section=skills_section,
         )
 
         result = call_llm_json(
@@ -223,19 +207,21 @@ class Optimizer:
         return candidate
 
     def _generate_new(
-        self, fm_id: str, profile: FMProfile, trace: MASTrace, dag: MASDAG | None,
+        self,
+        fm_id: str,
+        profiles: list[FMProfile],
+        traces: list[MASTrace],
+        dag: MASDAG | None,
     ) -> RepairCandidate:
         fm_info = FM_DEFINITIONS[fm_id]
-        loc = profile.localization.get(fm_id)
 
         prompt = REPAIR_GENERATION_PROMPT.format(
             fm_id=fm_id,
             fm_name=fm_info["name"],
             fm_description=fm_info["description"],
-            agent=loc.agent if loc else "unknown",
-            step=loc.step if loc else "unknown",
-            root_cause=loc.root_cause if loc else "unknown",
-            mas_context=self._get_mas_context(trace, dag),
+            fault_summary=self._build_fault_summary(fm_id, profiles, traces),
+            mas_context=self._get_mas_context(traces[0], dag),
+            skills_section="",
         )
 
         result = call_llm_json(
@@ -250,8 +236,62 @@ class Optimizer:
         return (
             f"MAS: {trace.mas_name}, LLM: {trace.llm_name}, "
             f"Benchmark: {trace.benchmark_name}\n"
-            f"简单 2-agent 对话系统 (Student + Assistant)，多轮对话解题。"
+            f"Simple 2-agent dialogue system (Student + Assistant), multi-turn problem solving."
         )
+
+    def _normalize_inputs(
+        self,
+        traces: MASTrace | list[MASTrace],
+        profiles: FMProfile | list[FMProfile],
+    ) -> tuple[list[MASTrace], list[FMProfile]]:
+        norm_traces = traces if isinstance(traces, list) else [traces]
+        norm_profiles = profiles if isinstance(profiles, list) else [profiles]
+        if len(norm_traces) != len(norm_profiles):
+            raise ValueError("Number of traces and profiles must match.")
+        return norm_traces, norm_profiles
+
+    def _build_fault_summary(
+        self,
+        fm_id: str,
+        profiles: list[FMProfile],
+        traces: list[MASTrace],
+        limit: int = 3,
+    ) -> str:
+        agents = Counter()
+        steps = Counter()
+        causes = Counter()
+        examples: list[str] = []
+
+        for trace, profile in zip(traces, profiles, strict=False):
+            loc = profile.localization.get(fm_id)
+            if loc is None:
+                continue
+            if loc.agent:
+                agents[loc.agent] += 1
+            if loc.step:
+                steps[loc.step] += 1
+            if loc.root_cause:
+                causes[loc.root_cause.strip()] += 1
+            if len(examples) < limit:
+                context = loc.context.strip().replace("\n", " ")
+                if len(context) > 180:
+                    context = context[:177] + "..."
+                examples.append(
+                    f"  - trace {trace.trace_id}: agent={loc.agent}, step={loc.step}, "
+                    f"cause={loc.root_cause.strip()}, context={context}"
+                )
+
+        lines = [f"- Observed in {sum(1 for p in profiles if fm_id in p.active_fm_ids())}/{len(profiles)} traces"]
+        if agents:
+            lines.append("- Common agents: " + ", ".join(f"{agent} ({count})" for agent, count in agents.most_common(limit)))
+        if steps:
+            lines.append("- Common steps: " + ", ".join(f"{step} ({count})" for step, count in steps.most_common(limit)))
+        if causes:
+            lines.append("- Common root causes: " + " | ".join(cause for cause, _ in causes.most_common(limit)))
+        if examples:
+            lines.append("- Representative evidence:")
+            lines.extend(examples)
+        return "\n".join(lines)
 
     def _parse_result(self, result: dict, fm_id: str) -> RepairCandidate:
         actions = []

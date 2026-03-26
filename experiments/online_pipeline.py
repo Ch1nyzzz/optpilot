@@ -57,7 +57,12 @@ def run_online_pipeline(
     print(f"Rounds completed: {summary['total_rounds']}")
     print(f"Library: {summary['library_stats']}")
     for r in summary["results"]:
-        print(f"  Round {r['round']}: FM-{r['target_fm']} {r['before_count']}→{r['after_count']} ({r['repair_status']})")
+        print(
+            f"  Round {r['round']}: FM-{r['target_fm']} {r['before_count']}→{r['after_count']}, "
+            f"pass {r['before_pass_rate']:.3f}→{r['after_pass_rate']:.3f}, "
+            f"runtime {r['before_runtime_s']:.2f}s→{r['after_runtime_s']:.2f}s "
+            f"({r['repair_status']})"
+        )
 
 
 if __name__ == "__main__":

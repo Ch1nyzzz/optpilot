@@ -3,9 +3,9 @@
 MAST-Data → Diagnose (all FMs, 并行) → YAML Optimize → Judge (并行) → Library.
 
 并发策略 (RPM=3000):
-- trace 间: ThreadPoolExecutor 并行处理多条 trace
-- FM 诊断: 同一 trace 内多个 FM 并行 localize
-- Judge: 同一 trace 内多个 FM 并行评估
+- trace 间: asyncio 并发处理多条 trace
+- FM 诊断: 同一 trace 内多个 FM 异步 localize
+- Judge: 同一 trace 内多个 FM 异步评估
 
 Usage:
     python -m experiments.offline_yaml_pipeline --yaml dags/ag2_mathchat.yaml --max-traces 10
@@ -13,15 +13,15 @@ Usage:
 """
 
 import argparse
+import asyncio
 import json
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from optpilot.config import LIBRARY_DIR, RESULTS_DIR
+from optpilot.config import LIBRARY_DIR, OFFLINE_YAML_MAX_WORKERS, RESULTS_DIR
 from optpilot.data.fm_taxonomy import FM_NAMES
 from optpilot.data.loader import load_traces, print_fm_stats
 from optpilot.library.repair_library import RepairLibrary
@@ -47,16 +47,16 @@ def _yaml_diff_summary(original: str, modified: str) -> str:
     return ", ".join(parts) if parts else "no diff"
 
 
-def _judge_one_fm(
+async def _judge_one_fm(
     judge: Judge, trace: MASTrace, fm_id: str,
     candidate: RepairCandidate, profile: FMProfile,
 ) -> tuple[str, JudgeVerdict]:
     """Judge 单个 FM，返回 (fm_id, verdict)。"""
-    verdict = judge.evaluate(trace, fm_id, candidate, profile)
+    verdict = await judge.aevaluate(trace, fm_id, candidate, profile)
     return fm_id, verdict
 
 
-def _process_one_trace(
+async def _process_one_trace(
     trace: MASTrace,
     yaml_path: Path,
     diagnoser: Diagnoser,
@@ -71,14 +71,14 @@ def _process_one_trace(
 
     t0 = time.time()
 
-    # 1. Diagnose (内部已并行化)
-    profile = diagnoser.diagnose(trace)
+    # 1. Diagnose (内部已异步化)
+    profile = await diagnoser.adiagnose(trace)
 
     diag_time = time.time() - t0
 
     # 2. Optimize YAML
     t1 = time.time()
-    opt_result = optimizer.optimize(yaml_path, profile, trace)
+    opt_result = await optimizer.aoptimize(yaml_path, profile, trace)
     opt_time = time.time() - t1
 
     # 3. Judge (并行评估所有 FM)
@@ -96,15 +96,12 @@ def _process_one_trace(
     t2 = time.time()
     verdicts: dict[str, JudgeVerdict] = {}
     fm_ids = profile.active_fm_ids()
-    with ThreadPoolExecutor(max_workers=min(judge_workers, len(fm_ids))) as pool:
-        futures = {
-            pool.submit(_judge_one_fm, judge, trace, fm_id, candidate, profile): fm_id
-            for fm_id in fm_ids
-        }
-        for fut in as_completed(futures):
-            fm_id = futures[fut]
+    judge_semaphore = asyncio.Semaphore(min(judge_workers, len(fm_ids)))
+
+    async def judge_one(fm_id: str) -> None:
+        async with judge_semaphore:
             try:
-                _, verdict = fut.result()
+                _, verdict = await _judge_one_fm(judge, trace, fm_id, candidate, profile)
                 verdicts[fm_id] = verdict
             except Exception as e:
                 print(f"    Judge failed for FM-{fm_id}: {e}")
@@ -112,6 +109,8 @@ def _process_one_trace(
                     trace_id=trace.trace_id, fm_id=fm_id,
                     would_fix=False, confidence=0.0, reasoning=str(e),
                 )
+
+    await asyncio.gather(*(judge_one(fm_id) for fm_id in fm_ids))
 
     judge_time = time.time() - t2
     total_time = time.time() - t0
@@ -168,13 +167,13 @@ def _process_one_trace(
     }
 
 
-def run_offline_yaml_pipeline(
+async def _run_offline_yaml_pipeline_async(
     yaml_path: str,
     mas_name: str = "AG2",
     fm_filter: str | None = None,
     benchmark: str | None = None,
     max_traces: int | None = None,
-    max_workers: int = 20,
+    max_workers: int = OFFLINE_YAML_MAX_WORKERS,
 ):
     yaml_path = Path(yaml_path)
     if not yaml_path.exists():
@@ -210,23 +209,27 @@ def run_offline_yaml_pipeline(
     print(f"Processing {len(traces)} traces with {max_workers} workers...")
     print()
 
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(traces))) as pool:
-        futures = {
-            pool.submit(
-                _process_one_trace, trace, yaml_path,
-                diagnoser, optimizer, judge,
-                judge_workers=max_workers,
-            ): i
-            for i, trace in enumerate(traces)
-        }
-        for fut in as_completed(futures):
-            idx = futures[fut]
+    trace_semaphore = asyncio.Semaphore(min(max_workers, len(traces)))
+
+    async def process_trace(idx: int, trace: MASTrace) -> None:
+        async with trace_semaphore:
             try:
-                result = fut.result()
+                result = await _process_one_trace(
+                    trace,
+                    yaml_path,
+                    diagnoser,
+                    optimizer,
+                    judge,
+                    judge_workers=max_workers,
+                )
                 if result:
                     results.append(result)
             except Exception as e:
                 print(f"  ERROR trace index {idx}: {e}")
+
+    await asyncio.gather(
+        *(process_trace(i, trace) for i, trace in enumerate(traces))
+    )
 
     total_time = time.time() - t_start
 
@@ -269,6 +272,26 @@ def run_offline_yaml_pipeline(
     print(f"Results saved: {out_file}")
 
 
+def run_offline_yaml_pipeline(
+    yaml_path: str,
+    mas_name: str = "AG2",
+    fm_filter: str | None = None,
+    benchmark: str | None = None,
+    max_traces: int | None = None,
+    max_workers: int = OFFLINE_YAML_MAX_WORKERS,
+):
+    asyncio.run(
+        _run_offline_yaml_pipeline_async(
+            yaml_path=yaml_path,
+            mas_name=mas_name,
+            fm_filter=fm_filter,
+            benchmark=benchmark,
+            max_traces=max_traces,
+            max_workers=max_workers,
+        )
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="OptPilot Offline YAML Pipeline (Concurrent)")
     parser.add_argument("--yaml", required=True, help="Path to MAS YAML config")
@@ -276,7 +299,12 @@ if __name__ == "__main__":
     parser.add_argument("--fm", default=None, help="Filter traces by FM (optional)")
     parser.add_argument("--benchmark", default=None, help="Filter by benchmark")
     parser.add_argument("--max-traces", type=int, default=None, help="Max traces")
-    parser.add_argument("--workers", type=int, default=20, help="Max concurrent workers (default: 20)")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=OFFLINE_YAML_MAX_WORKERS,
+        help=f"Max concurrent workers (default: {OFFLINE_YAML_MAX_WORKERS})",
+    )
     args = parser.parse_args()
 
     run_offline_yaml_pipeline(

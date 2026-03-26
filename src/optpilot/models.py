@@ -29,6 +29,8 @@ class MASTrace:
     task_key: str = ""     # task identifier
     mast_annotation: dict[str, int] = field(default_factory=dict)  # fm_id -> 0/1
     task_success: bool | None = None
+    task_score: float | None = None
+    latency_s: float | None = None
 
     def active_fm_ids(self) -> list[str]:
         return [k for k, v in self.mast_annotation.items() if v == 1]
@@ -100,16 +102,22 @@ class RepairCandidate:
 @dataclass
 class RepairEntry:
     entry_id: str = ""
+    entry_kind: str = "hint"  # "hint" | "wrapped"
     fm_id: str = ""
     fm_name: str = ""
     source_mas: str = ""
     root_cause_pattern: str = ""  # 蒸馏后的 root cause 类型摘要 (skill key)
+    when_not_to_use: str = ""
     candidate: RepairCandidate | None = None
     status: str = "unvalidated"  # "unvalidated" | "validated" | "failed"
     success_rate: float = 0.0
     n_applied: int = 0
     n_success: int = 0
     side_effects: list[str] = field(default_factory=list)
+    avoid_actions: list[str] = field(default_factory=list)
+    supporting_entry_ids: list[str] = field(default_factory=list)
+    counter_entry_ids: list[str] = field(default_factory=list)
+    validation_metrics: dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
 
     def __post_init__(self):

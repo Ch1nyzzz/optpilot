@@ -6,10 +6,11 @@ Uses the built-in DAGExecutor instead of external subprocess calls.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 from optpilot.config import TARGET_MODEL
 from optpilot.dag.core import MASDAG
-from optpilot.dag.executor import DAGExecutor
+from optpilot.dag.executor import DAGExecutor, ExecutionTrace
 from optpilot.llm import call_llm
 from optpilot.models import MASTrace
 from optpilot.modules.base_runner import MASRunner
@@ -25,6 +26,7 @@ class OptPilotRunner(MASRunner):
         dag: MASDAG | None = None,
         dag_path: str | Path | None = None,
         model: str = TARGET_MODEL,
+        score_fn: Callable[[str, MASDAG, ExecutionTrace], float | None] | None = None,
         max_steps: int = 200,
         timeout: int = 600,
     ):
@@ -34,6 +36,7 @@ class OptPilotRunner(MASRunner):
             dag: A MASDAG instance to execute. Mutually exclusive with dag_path.
             dag_path: Path to a MASDAG YAML file.
             model: Default LLM model for agent nodes.
+            score_fn: Optional benchmark scorer. Should return a higher-is-better score.
             max_steps: Safety limit on total node executions.
             timeout: Overall execution timeout in seconds.
         """
@@ -45,6 +48,7 @@ class OptPilotRunner(MASRunner):
             self._dag = None
 
         self.model = model
+        self.score_fn = score_fn
         self.max_steps = max_steps
         self.timeout = timeout
 
@@ -90,6 +94,9 @@ class OptPilotRunner(MASRunner):
             out.mkdir(parents=True, exist_ok=True)
             (out / "trace.txt").write_text(exec_trace.to_trajectory(), encoding="utf-8")
 
+        task_success = self._infer_task_success(run_dag, exec_trace)
+        task_score = self._score_trace(task_prompt, run_dag, exec_trace, task_success)
+
         return MASTrace(
             trace_id=-1,
             mas_name=run_dag.dag_id or "OptPilot",
@@ -97,6 +104,9 @@ class OptPilotRunner(MASRunner):
             benchmark_name="ProgramDev",
             trajectory=exec_trace.to_trajectory(),
             task_key=task_prompt[:50],
+            task_success=task_success,
+            task_score=task_score,
+            latency_s=exec_trace.total_duration_s,
         )
 
     def run_batch(
@@ -114,3 +124,30 @@ class OptPilotRunner(MASRunner):
             trace.trace_id = i
             traces.append(trace)
         return traces
+
+    def _infer_task_success(self, dag: MASDAG, exec_trace: ExecutionTrace) -> bool:
+        if not exec_trace.finished or bool(exec_trace.error):
+            return False
+
+        executed_nodes = {step.node_id for step in exec_trace.steps}
+        success_nodes = dag.metadata.get("success_nodes", [])
+        if success_nodes:
+            return any(node_id in executed_nodes for node_id in success_nodes)
+
+        if "FINAL" in dag.nodes:
+            return "FINAL" in executed_nodes
+
+        return True
+
+    def _score_trace(
+        self,
+        task_prompt: str,
+        dag: MASDAG,
+        exec_trace: ExecutionTrace,
+        task_success: bool,
+    ) -> float:
+        if self.score_fn is not None:
+            score = self.score_fn(task_prompt, dag, exec_trace)
+            if score is not None:
+                return float(score)
+        return 1.0 if task_success else 0.0

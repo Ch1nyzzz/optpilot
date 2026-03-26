@@ -1,0 +1,64 @@
+[
+  {
+    "entry_id": "bb236219",
+    "entry_kind": "hint",
+    "fm_id": "1.3",
+    "fm_name": "Step Repetition",
+    "source_mas": "AG2",
+    "root_cause_pattern": "Apply when an agent accepts computational results without independent verification, causing step repetition or acceptance of incorrect results.",
+    "when_not_to_use": "",
+    "candidate": {
+      "fm_id": "1.3",
+      "actions": [
+        {
+          "repair_type": "node_add",
+          "target": "Result Verifier",
+          "description": "Add a new Result Verifier node that independently verifies computational results",
+          "details": {
+            "role": "Result Verifier",
+            "prompt": "You are responsible for independently verifying computational results. For any calculation provided, perform your own independent verification using different methods or approaches. Compare your result with the provided result and flag any discrepancies. Only approve the result if your independent verification confirms its correctness.",
+            "model_config": {
+              "model": "gpt-4",
+              "temperature": 0.2
+            }
+          },
+          "rationale": "This directly addresses the root cause: the agent skipped verification. By adding a dedicated verification node that performs independent checking, the system will now validate computational results before accepting them, preventing the step repetition fault where incorrect results are simply accepted."
+        },
+        {
+          "repair_type": "node_mutation",
+          "target": "mathproxyagent → Result Verifier",
+          "description": "Add edge from mathproxyagent to Result Verifier to route computational results through verification",
+          "details": {
+            "trigger": true,
+            "cond": "true"
+          },
+          "rationale": "This ensures every computational result from mathproxyagent must pass through the verification step before being accepted, preventing the loop where results are immediately accepted without validation."
+        },
+        {
+          "repair_type": "node_mutation",
+          "target": "Result Verifier → [next node]",
+          "description": "Add edge from Result Verifier to continue workflow after verification",
+          "details": {
+            "trigger": true,
+            "cond": "verification_passed",
+            "data_carried": "verified_result"
+          },
+          "rationale": "This allows the workflow to proceed only after verification passes, creating a proper continue/exit condition for the verification step."
+        }
+      ],
+      "description": "Add a result verification node to ensure computational results are independently validated before acceptance",
+      "source": "generated",
+      "confidence": 0.85
+    },
+    "status": "unvalidated",
+    "success_rate": 0.95,
+    "n_applied": 1,
+    "n_success": 1,
+    "side_effects": [],
+    "avoid_actions": [],
+    "supporting_entry_ids": [],
+    "counter_entry_ids": [],
+    "validation_metrics": {},
+    "created_at": "2026-03-26T01:16:19.638932"
+  }
+]

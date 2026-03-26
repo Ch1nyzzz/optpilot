@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from optpilot.config import DAG_DIR, LIBRARY_DIR
+from optpilot.config import DAG_DIR, OFFLINE_HINTS_DIR, OFFLINE_SKILLS_DIR
 from optpilot.dag.core import MASDAG
 from optpilot.data.fm_taxonomy import FM_NAMES
 from optpilot.data.loader import load_traces, print_fm_stats
@@ -21,6 +21,7 @@ from optpilot.modules.diagnoser import Diagnoser
 from optpilot.modules.distiller import Distiller
 from optpilot.modules.judge import Judge
 from optpilot.modules.optimizer import Optimizer
+from optpilot.modules.wrap_up import WrapUp
 from optpilot.tracking import Tracker
 
 
@@ -46,12 +47,16 @@ def run_offline_pipeline(
         print(f"Avg trajectory length: {avg_len:.0f} chars")
     print()
 
+    hints_path = OFFLINE_HINTS_DIR / mas_name.lower() / f"fm_{fm_id.replace('.', '_')}_hints.json"
+    skills_path = OFFLINE_SKILLS_DIR / mas_name.lower() / f"fm_{fm_id.replace('.', '_')}_skills.json"
+
     # 2. Initialize modules with optional DAG context
-    library = RepairLibrary(LIBRARY_DIR / f"offline_{mas_name.lower()}_library.json")
+    hints_library = RepairLibrary(hints_path)
+    skills_library = RepairLibrary(skills_path)
     diagnoser = Diagnoser()
-    optimizer = Optimizer(library)
+    optimizer = Optimizer(hints_library)
     judge = Judge()
-    distiller = Distiller(library)
+    distiller = Distiller(hints_library)
     tracker = Tracker(f"offline_{mas_name}_{fm_id}", use_wandb=use_wandb)
 
     # Load DAG if path provided
@@ -110,14 +115,20 @@ def run_offline_pipeline(
         print()
 
     # 4. Summary
-    stats = library.get_stats()
+    stats = hints_library.get_stats()
     print(f"=== Pipeline Complete ===")
     print(f"Traces processed: {len(traces)}")
-    print(f"Library stats: {stats}")
+    print(f"Hint stats: {stats}")
 
     would_fix_count = sum(1 for r in tracker.results if isinstance(r, dict) and r.get("would_fix"))
     print(f"Judge positive rate: {would_fix_count}/{len(traces)}")
 
+    wrap_up = WrapUp(hints_library, output_library=skills_library)
+    wrapped = wrap_up.wrap_fm(fm_id, source_mas=mas_name)
+    print(f"Wrapped skills for FM-{fm_id}: {len(wrapped)}")
+
+    hints_library.flush()
+    skills_library.flush()
     tracker.save_local(f"offline_{mas_name}_{fm_id}.json")
     print("Done!")
 

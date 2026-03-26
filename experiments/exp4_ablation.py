@@ -74,6 +74,7 @@ def run_ablation_variant(
         if variant != "wo_distillation":
             distiller.distill_offline(fm_id, candidate, verdict)
 
+    library.flush()
     return {
         "variant": variant,
         "fm_id": fm_id,

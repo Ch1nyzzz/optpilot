@@ -1,7 +1,7 @@
-"""YAMLOptimizer - 直接读写 YAML 的 MAS 优化器。
+"""YAMLOptimizer - YAML-level MAS optimizer.
 
-不经过 DAG 抽象，Optimizer 直接看到完整 YAML 配置，
-根据诊断结果输出修改后的 YAML。
+Bypasses the DAG abstraction; the Optimizer sees the full YAML config
+and outputs a modified YAML based on diagnosis results.
 """
 
 from __future__ import annotations
@@ -12,92 +12,58 @@ from pathlib import Path
 import yaml
 
 from optpilot.data.fm_taxonomy import FM_DEFINITIONS
-from optpilot.llm import call_llm
+from optpilot.llm import acall_llm, call_llm
 from optpilot.models import FMProfile, MASTrace
 
 
-OPTIMIZE_PROMPT = """你是一个多智能体系统 (MAS) 架构优化专家。
+OPTIMIZE_PROMPT = """\
+You are a multi-agent system (MAS) architecture optimizer.
 
-你将看到一个 MAS 的完整 YAML 配置和该系统的故障诊断结果。
-你的任务是修改 YAML 配置来修复这些故障。
+Modify the YAML configuration below to fix the diagnosed faults. Make only targeted changes -- do not alter unrelated parts.
 
-## 当前 YAML 配置
+## Current YAML Configuration
 ```yaml
 {yaml_content}
 ```
 
-## 故障诊断结果
+## Fault Diagnosis
 {diagnosis_text}
 
-## 故障 Trace (供参考)
+## Fault Trace (reference)
 {trace_excerpt}
+{skills_section}
+## Allowed Modifications
+1. Agent prompt (nodes[].config.role) -- change agent behavior
+2. Tooling (nodes[].config.tooling) -- add/remove available tools
+3. Model parameters (nodes[].config.params) -- temperature, max_tokens, etc.
+4. Add agent -- new node + corresponding edges
+5. Remove agent -- delete node + clean up edges
+6. Message flow (edges) -- trigger, condition, carry_data, clear_context
+7. Termination conditions (edges[].condition) -- keyword matching rules
+8. Loop limits (loop_counter.config.max_iterations)
+9. Literal prompts (literal nodes' config.content)
 
-## 你可以做的修改
-1. **修改 agent prompt** (nodes[].config.role) — 改变 agent 行为
-2. **修改 tooling** (nodes[].config.tooling) — 增减 agent 可用工具
-3. **修改模型参数** (nodes[].config.params) — temperature, max_tokens 等
-4. **增加 agent** — 加新 node + 对应 edges
-5. **删除 agent** — 移除 node + 清理 edges
-6. **修改消息流** (edges) — 改 trigger, condition, carry_data, clear_context 等
-7. **修改终止条件** (edges[].condition) — keyword 匹配规则
-8. **修改循环上限** (loop_counter.config.max_iterations)
-9. **修改 literal prompt** (literal nodes 的 config.content)
+## Output Format
+1. Analysis: explain your reasoning and proposed changes (max 200 words)
+2. Modified YAML: output the COMPLETE modified YAML wrapped in ```yaml ... ```
+   - Must be valid, engine-executable YAML
+   - Only make changes that address the diagnosed faults
+   - Preserve vars, version, and other metadata unchanged"""
 
-## 输出要求
-1. 先输出你的分析和修改方案（不超过 300 字）
-2. 然后输出修改后的**完整 YAML**，用 ```yaml ... ``` 包裹
-3. YAML 必须是合法的、可以直接被引擎执行的完整配置
-4. 只做针对诊断结果的必要修改，不要做无关改动
-5. 保持 vars, version 等元信息不变"""
-
-
-OPTIMIZE_WITH_SKILLS_PROMPT = """你是一个多智能体系统 (MAS) 架构优化专家。
-
-你将看到一个 MAS 的完整 YAML 配置和该系统的故障诊断结果。
-你的任务是修改 YAML 配置来修复这些故障。
-以下是一些来自经验库的参考 skill（仅供参考，不必照搬）。
-
-## 当前 YAML 配置
-```yaml
-{yaml_content}
-```
-
-## 故障诊断结果
-{diagnosis_text}
-
-## 故障 Trace (供参考)
-{trace_excerpt}
-
-## 经验库参考 Skills
+SKILLS_SECTION_TEMPLATE = """
+## Reference Skills (from experience library, for guidance only)
 {skills_text}
-
-## 你可以做的修改
-1. **修改 agent prompt** (nodes[].config.role) — 改变 agent 行为
-2. **修改 tooling** (nodes[].config.tooling) — 增减 agent 可用工具
-3. **修改模型参数** (nodes[].config.params) — temperature, max_tokens 等
-4. **增加 agent** — 加新 node + 对应 edges
-5. **删除 agent** — 移除 node + 清理 edges
-6. **修改消息流** (edges) — 改 trigger, condition, carry_data, clear_context 等
-7. **修改终止条件** (edges[].condition) — keyword 匹配规则
-8. **修改循环上限** (loop_counter.config.max_iterations)
-9. **修改 literal prompt** (literal nodes 的 config.content)
-
-## 输出要求
-1. 先输出你的分析和修改方案（不超过 300 字）
-2. 然后输出修改后的**完整 YAML**，用 ```yaml ... ``` 包裹
-3. YAML 必须是合法的、可以直接被引擎执行的完整配置
-4. 只做针对诊断结果的必要修改，不要做无关改动
-5. 保持 vars, version 等元信息不变"""
+"""
 
 
 def _build_diagnosis_text(profile: FMProfile) -> str:
-    """把 FMProfile 中所有活跃 FM 的诊断信息格式化。"""
+    """Format all active FM diagnosis info from an FMProfile."""
     lines = []
     for fm_id in profile.active_fm_ids():
         fm_info = FM_DEFINITIONS.get(fm_id, {})
         loc = profile.localization.get(fm_id)
         lines.append(f"### FM-{fm_id}: {fm_info.get('name', '?')}")
-        lines.append(f"- 定义: {fm_info.get('description', '?')}")
+        lines.append(f"- Definition: {fm_info.get('description', '?')}")
         if loc:
             lines.append(f"- Agent: {loc.agent}")
             lines.append(f"- Step: {loc.step}")
@@ -108,11 +74,11 @@ def _build_diagnosis_text(profile: FMProfile) -> str:
 
 
 def _extract_yaml(response: str) -> str:
-    """从 LLM 回复中提取 ```yaml ... ``` 块。"""
+    """Extract ```yaml ... ``` block from LLM response."""
     match = re.search(r'```yaml\s*\n(.*?)```', response, re.DOTALL)
     if match:
         return match.group(1).strip()
-    # fallback: 找最后一个 yaml 块
+    # Fallback: find the last yaml block
     matches = list(re.finditer(r'```yaml\s*\n(.*?)```', response, re.DOTALL))
     if matches:
         return matches[-1].group(1).strip()
@@ -120,7 +86,7 @@ def _extract_yaml(response: str) -> str:
 
 
 def _extract_analysis(response: str) -> str:
-    """提取 YAML 块之前的分析文本。"""
+    """Extract analysis text before the YAML block."""
     match = re.search(r'```yaml', response)
     if match:
         return response[:match.start()].strip()
@@ -128,7 +94,7 @@ def _extract_analysis(response: str) -> str:
 
 
 class YAMLOptimizer:
-    """直接操作 YAML 的 MAS 优化器。"""
+    """YAML-level MAS optimizer."""
 
     def __init__(self, library=None):
         self.library = library
@@ -139,12 +105,12 @@ class YAMLOptimizer:
         profile: FMProfile,
         trace: MASTrace,
     ) -> dict:
-        """根据诊断结果优化 YAML 配置。
+        """Optimize YAML config based on diagnosis results.
 
         Args:
-            yaml_path: 当前 YAML 配置文件路径
-            profile: 诊断结果 (所有活跃 FM 的 localization)
-            trace: 故障 trace
+            yaml_path: Path to the current YAML config file.
+            profile: Diagnosis results (all active FM localizations).
+            trace: Fault trace.
 
         Returns:
             {
@@ -160,37 +126,84 @@ class YAMLOptimizer:
         diagnosis_text = _build_diagnosis_text(profile)
         trace_excerpt = trace.trajectory[:3000]
 
-        # 查库
+        # Build optional skills section
         skills_text = self._get_relevant_skills(profile)
+        skills_section = (
+            SKILLS_SECTION_TEMPLATE.format(skills_text=skills_text)
+            if skills_text else ""
+        )
 
-        if skills_text:
-            prompt = OPTIMIZE_WITH_SKILLS_PROMPT.format(
-                yaml_content=original_yaml,
-                diagnosis_text=diagnosis_text,
-                trace_excerpt=trace_excerpt,
-                skills_text=skills_text,
-            )
-        else:
-            prompt = OPTIMIZE_PROMPT.format(
-                yaml_content=original_yaml,
-                diagnosis_text=diagnosis_text,
-                trace_excerpt=trace_excerpt,
-            )
+        prompt = OPTIMIZE_PROMPT.format(
+            yaml_content=original_yaml,
+            diagnosis_text=diagnosis_text,
+            trace_excerpt=trace_excerpt,
+            skills_section=skills_section,
+        )
 
         response = call_llm(
             [{"role": "user", "content": prompt}],
             max_tokens=16384,
         )
 
-        # 解析
+        # Parse response
         analysis = _extract_analysis(response)
         modified_yaml = _extract_yaml(response)
 
-        # 验证 YAML 合法性
+        # Validate YAML
         yaml_valid = False
         try:
             parsed = yaml.safe_load(modified_yaml)
-            # 基本结构检查
+            graph = parsed.get("graph", parsed)
+            has_nodes = "nodes" in graph and len(graph["nodes"]) > 0
+            has_edges = "edges" in graph
+            yaml_valid = has_nodes and has_edges
+        except Exception:
+            pass
+
+        return {
+            "original_yaml": original_yaml,
+            "modified_yaml": modified_yaml,
+            "analysis": analysis,
+            "fm_ids": profile.active_fm_ids(),
+            "yaml_valid": yaml_valid,
+        }
+
+    async def aoptimize(
+        self,
+        yaml_path: str | Path,
+        profile: FMProfile,
+        trace: MASTrace,
+    ) -> dict:
+        """Async optimize variant for high-concurrency pipelines."""
+        yaml_path = Path(yaml_path)
+        original_yaml = yaml_path.read_text(encoding="utf-8")
+        diagnosis_text = _build_diagnosis_text(profile)
+        trace_excerpt = trace.trajectory[:3000]
+
+        skills_text = self._get_relevant_skills(profile)
+        skills_section = (
+            SKILLS_SECTION_TEMPLATE.format(skills_text=skills_text)
+            if skills_text else ""
+        )
+
+        prompt = OPTIMIZE_PROMPT.format(
+            yaml_content=original_yaml,
+            diagnosis_text=diagnosis_text,
+            trace_excerpt=trace_excerpt,
+            skills_section=skills_section,
+        )
+
+        response = await acall_llm(
+            [{"role": "user", "content": prompt}],
+            max_tokens=16384,
+        )
+
+        analysis = _extract_analysis(response)
+        modified_yaml = _extract_yaml(response)
+
+        yaml_valid = False
+        try:
+            parsed = yaml.safe_load(modified_yaml)
             graph = parsed.get("graph", parsed)
             has_nodes = "nodes" in graph and len(graph["nodes"]) > 0
             has_edges = "edges" in graph
@@ -213,7 +226,7 @@ class YAMLOptimizer:
         trace: MASTrace,
         output_path: str | Path | None = None,
     ) -> dict:
-        """优化并保存修改后的 YAML。"""
+        """Optimize and save the modified YAML."""
         result = self.optimize(yaml_path, profile, trace)
 
         if result["yaml_valid"]:
@@ -227,7 +240,7 @@ class YAMLOptimizer:
         return result
 
     def _get_relevant_skills(self, profile: FMProfile) -> str:
-        """从 library 中检索与当前 FM 相关的 skills。"""
+        """Retrieve skills relevant to current FMs from the library."""
         if not self.library:
             return ""
 
@@ -235,7 +248,7 @@ class YAMLOptimizer:
         skills = []
         for fm_id in fm_ids:
             entries = self.library.search(fm_id)
-            for e in entries[:2]:  # 每个 FM 最多 2 条
+            for e in entries[:2]:  # max 2 per FM
                 skills.append(
                     f"- FM-{e.fm_id} [{e.status}, success={e.success_rate:.0%}]: "
                     f"{e.root_cause_pattern}"

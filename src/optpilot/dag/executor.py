@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -146,6 +146,7 @@ class DAGExecutor:
         for edge in dag.edges:
             if edge.trigger:
                 self._incoming_triggers[edge.target].append(edge)
+        self._loop_edges: dict[str, tuple[list[DAGEdge], list[DAGEdge]]] = {}
 
     def run(self, task_prompt: str) -> ExecutionTrace:
         """Execute the DAG with the given task prompt."""
@@ -167,7 +168,7 @@ class DAGExecutor:
             start_nodes = list(all_nodes - triggered_targets)
 
         # Initialize start nodes with task prompt
-        ready_queue: list[str] = []
+        ready_queue: deque[str] = deque()
         for nid in start_nodes:
             node_inputs[nid].append(task_prompt)
             ready_queue.append(nid)
@@ -187,7 +188,7 @@ class DAGExecutor:
                     trace.error = f"Max steps exceeded ({self.max_global_steps})"
                     break
 
-                node_id = ready_queue.pop(0)
+                node_id = ready_queue.popleft()
                 node = self.dag.nodes.get(node_id)
                 if node is None:
                     continue
@@ -230,6 +231,16 @@ class DAGExecutor:
                         max_iter = target_node.config.get("max_iterations", 3)
                         count = loop_counts.get(target_id, 0) + 1
                         loop_counts[target_id] = count
+                        continue_edges, exit_edges = self._get_loop_edges(target_id)
+                        selected_edges = exit_edges if count >= max_iter else continue_edges
+                        if not selected_edges:
+                            # Fall back to legacy behavior for DAGs that do not encode
+                            # a recognizable loop structure.
+                            selected_edges = [
+                                lc_edge
+                                for lc_edge in self._outgoing.get(target_id, [])
+                                if lc_edge.trigger
+                            ]
 
                         if count >= max_iter:
                             # Loop exhausted: propagate to loop_counter's own outgoing edges
@@ -244,18 +255,17 @@ class DAGExecutor:
                                 input_text=f"loop exhausted ({count}/{max_iter})",
                                 output_text=output,
                             ))
-                            # Propagate from loop counter
-                            for lc_edge in self._outgoing.get(target_id, []):
-                                if lc_edge.trigger and evaluate_condition(lc_edge.condition, output):
+                            # Propagate only along loop-exit edges.
+                            for lc_edge in selected_edges:
+                                if evaluate_condition(lc_edge.condition, output):
                                     payload = output if lc_edge.carry_data else ""
                                     node_inputs[lc_edge.target].append(payload)
                                     if lc_edge.target not in ready_queue:
                                         ready_queue.append(lc_edge.target)
                         else:
-                            # Loop continues: re-trigger the loop body
-                            # Find non-exit edges from this loop counter
-                            for lc_edge in self._outgoing.get(target_id, []):
-                                if lc_edge.trigger:
+                            # Loop continues: re-trigger only the loop body.
+                            for lc_edge in selected_edges:
+                                if evaluate_condition(lc_edge.condition, output):
                                     payload = output if lc_edge.carry_data else ""
                                     node_inputs[lc_edge.target].append(payload)
                                     if lc_edge.target not in ready_queue:
@@ -316,3 +326,57 @@ class DAGExecutor:
             kwargs["max_tokens"] = node.config["max_tokens"]
 
         return self.llm_fn(messages, model=model, **kwargs)
+
+    def _get_loop_edges(self, loop_node_id: str) -> tuple[list[DAGEdge], list[DAGEdge]]:
+        """Split loop-counter outgoing trigger edges into continue vs exit paths.
+
+        Priority:
+        1. Explicit edge config ``loop: continue|exit``
+        2. Topology inference: if the target can reach this loop counter again
+           via trigger edges, treat it as a continue edge.
+        """
+        cached = self._loop_edges.get(loop_node_id)
+        if cached is not None:
+            return cached
+
+        continue_edges: list[DAGEdge] = []
+        exit_edges: list[DAGEdge] = []
+
+        for edge in self._outgoing.get(loop_node_id, []):
+            if not edge.trigger:
+                continue
+
+            loop_mode = edge.config.get("loop")
+            if loop_mode == "continue":
+                continue_edges.append(edge)
+                continue
+            if loop_mode == "exit":
+                exit_edges.append(edge)
+                continue
+
+            if self._has_trigger_path(edge.target, loop_node_id):
+                continue_edges.append(edge)
+            else:
+                exit_edges.append(edge)
+
+        self._loop_edges[loop_node_id] = (continue_edges, exit_edges)
+        return continue_edges, exit_edges
+
+    def _has_trigger_path(self, start_node_id: str, target_node_id: str) -> bool:
+        """Return True when ``start_node_id`` can reach ``target_node_id``."""
+        pending = [start_node_id]
+        visited: set[str] = set()
+
+        while pending:
+            node_id = pending.pop()
+            if node_id == target_node_id:
+                return True
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+
+            for edge in self._outgoing.get(node_id, []):
+                if edge.trigger and edge.target not in visited:
+                    pending.append(edge.target)
+
+        return False

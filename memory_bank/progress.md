@@ -4,7 +4,7 @@
 
 - Core OptPilot pipeline implemented and running on AG2 (MathChat) traces.
 - Offline pipeline validated: Diagnoser → Optimizer → Judge → Distiller → Library.
-- Models: GLM-5 (OptPilot system) + gpt-oss-120b (target MAS) via Together AI.
+- Models: GLM-5 (Judge) + MiniMax M2.5 (other paths) via Together AI.
 
 ## Latest Update (2026-03-25)
 
@@ -48,7 +48,7 @@
 | 2026-03-25 | 核心差异化 = targeted repair vs blind evolution | MAST+OpenEvolve 做了 taxonomy-as-reward，我们走 diagnosis→action |
 | 2026-03-25 | MVP 切换到 AG2 (MathChat) | 597 条 trace，短 trace (5K chars)，简单 2-agent 架构 |
 | 2026-03-25 | 双层实验: offline + online | 对比反事实评估 vs 实跑验证的 gap |
-| 2026-03-25 | Together AI: GLM-5 (system) + gpt-oss-120b (target) | 统一 API |
+| 2026-03-25 | Together AI: GLM-5 (Judge) + MiniMax M2.5 (other paths) | 统一 API |
 
 ### Phase 3: 架构脱耦 (完成 2026-03-25)
 - **完全脱离 chatdev_v2 依赖**:
