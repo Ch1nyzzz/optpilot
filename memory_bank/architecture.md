@@ -1,70 +1,92 @@
 # Architecture
 
-## Current Repository Architecture
+## Current Repository Structure
 
-The repository is currently documentation-first and organized around research notes.
+```
+optpilot/
+├── src/optpilot/              # Core library
+│   ├── config.py              # Global configuration (env, models, paths)
+│   ├── models.py              # Core data models (MASTrace, FMProfile, RepairAction, etc.)
+│   ├── llm.py                 # LLM interface (Together AI)
+│   ├── orchestrator.py        # Online optimization loop controller
+│   ├── registry.py            # Runner factory
+│   ├── tracking.py            # Experiment tracking (W&B integration)
+│   ├── dag/                   # DAG abstraction and execution
+│   │   ├── core.py            # MASDAG, DAGNode, DAGEdge + serialization
+│   │   └── executor.py        # DAGExecutor: lightweight workflow engine
+│   ├── modules/               # Core optimization modules
+│   │   ├── base_runner.py     # MASRunner abstract base
+│   │   ├── runner.py          # OptPilotRunner (built-in DAG execution)
+│   │   ├── diagnoser.py       # FM diagnosis via LLM
+│   │   ├── optimizer.py       # RepairCandidate generation
+│   │   ├── judge.py           # Offline counterfactual evaluation
+│   │   ├── distiller.py       # Distill repairs into reusable skills
+│   │   └── yaml_optimizer.py  # YAML-based optimization
+│   ├── library/
+│   │   └── repair_library.py  # Persistent repair library (JSON)
+│   └── data/
+│       ├── fm_taxonomy.py     # FM definitions and taxonomy
+│       └── loader.py          # Load MAST-Data traces
+├── dags/                      # MASDAG workflow definitions (YAML)
+│   └── chatdev.yaml           # ChatDev v1 workflow
+├── experiments/               # Experiment pipelines
+├── library_store/             # Repair library storage
+├── results/                   # Experiment results
+└── memory_bank/               # Project documentation
+```
 
-- `related_papers.md`: primary literature synthesis and project framing
-- `papers/`: supporting paper files and source material (21 papers)
-- `experiment_design.md`: 实验设计文档 (v2)，包含 pipeline、baselines、metrics、open questions
-- `memory_bank/`: persistent project memory for goals, progress, and architecture
-- `AGENTS.md` and `CLAUDE.md`: contributor and agent instructions
+## Core Architecture Decision: MAS-as-DAG
 
-## Core Architecture Decision: MAS-as-DAG (2026-03-25)
+任何 MAS 系统统一表示为 MASDAG（有向图，支持循环）：
+- **DAGNode** = Agent (role, prompt, config) | Literal | LoopCounter | Passthrough
+- **DAGEdge** = Communication (source→target, trigger, condition, carry_data)
+- **RepairAction** = DAG 操作 (node mutation/add/delete, edge mutation/rewire, config change)
 
-任何 MAS 系统统一表示为 DAG（有向无环图）：
-- **Node** = Agent (role_prompt, tools, config)
-- **Edge** = Communication (source→target, message_schema, routing_condition)
-- **Repair Action** = DAG 操作 (node mutation/add/delete, edge mutation/rewire)
+MASDAG 是唯一的核心表示，既用于定义、又用于执行、又用于修复。
 
-每个 MAS 框架需要一个 DAG adapter：`to_dag()`, `from_dag()`, `apply_repair(action)`。
-这解决了跨 MAS 的统一修改接口问题，也使 repair action 天然可迁移。
+## DAG Executor (2026-03-25)
 
-## ChatDev 源码分析 (2026-03-25)
+自研轻量执行引擎，完全脱离 ChatDev v2 依赖：
+- 基于 MASDAG 直接执行工作流（无需外部 subprocess）
+- 支持四种节点类型：agent (LLM调用), literal (固定文本), loop_counter (循环控制), passthrough (透传)
+- 支持 keyword 条件边和 trigger/non-trigger 边
+- 执行产出 ExecutionTrace，转为 MASTrace 供诊断
 
-ChatDev v2 **原生就是 YAML-driven DAG executor**：
-- 源码 ~28K 行 Python，核心是 DAG 执行引擎（`workflow/`）
-- 整个 MAS 定义在一个 YAML 文件（`yaml_instance/ChatDev_v1.yaml`，~1000 行）
-- YAML 结构：`graph.nodes[]` + `graph.edges[]`，天然匹配我们的 DAG 抽象
-- **DAG adapter 几乎不用写**——直接修改 YAML 即可
+执行流程：
+1. 确定 start nodes，注入 task prompt
+2. BFS 式执行 ready queue 中的节点
+3. 每个 agent 节点通过 llm_fn 调用 LLM
+4. 根据边条件传播输出到下游节点
+5. loop_counter 节点管理循环次数和退出
 
-ChatDev DAG 节点类型：
-- `agent`: LLM agent（Programmer, Code Reviewer, CEO, CPO, Test Engineer）
-- `literal`: 固定 prompt 文本（phase instruction）
-- `loop_counter`: 循环控制（code review max 10 轮，test max 3 轮）
-- `passthrough`: 路由节点
-
-可修改点（对应 repair action）：
-- **Node mutation**: 改 agent 的 `role` 字段（prompt）→ 直接改 YAML
-- **Node add/delete**: 增删 node + 对应 edges → 改 YAML
-- **Edge rewire**: 改 `from`/`to` → 改 YAML
-- **Loop config**: 改 `loop_counter.max_iterations`（如 code review 从 10 改为 5）→ 改 YAML
-- **Edge condition**: 改 keyword-based 终止条件 → 改 YAML
-
-## OptPilot Agent 架构 (2026-03-25)
+## OptPilot Agent 架构
 
 五个模块组成 closed-loop：
 
 | 模块 | 职责 |
 |------|------|
 | **Orchestrator** | 协调整个 loop，决定优先修哪个 FM，何时停止 |
-| **Runner** | 运行 MAS 收集轨迹，管理 DAG adapter (to_dag / from_dag / apply_repair) |
+| **Runner** | 用 DAGExecutor 直接执行 MASDAG，收集执行轨迹 |
 | **Diagnoser** | 基于 MAST 的 FM 分类标注，细化定位到具体 agent 和 step |
 | **Optimizer** | 检索 Repair Library 历史方案或用 LLM 生成新的 DAG repair action |
 | **Distiller** | 验证修复有效后蒸馏方案存入 Repair Library |
 
-数据流：Runner → Diagnoser → Optimizer → Runner (apply) → Diagnoser (verify) → Distiller
-
-**MVP 数据策略**：Phase A 直接用 MAST-Data 已有 trace（跳过 Runner），Phase B 再启用 Runner 验证。
+数据流：
+```
+Runner(dag) → traces → Diagnoser → profiles → Optimizer → candidate
+                                                              ↓
+                                                         apply_repair → new_dag
+                                                              ↓
+                                                    Runner(new_dag) → new_traces
+                                                              ↓
+                                                         Distiller → library
+```
 
 ## Architecture Change Policy
 
 Any meaningful architecture decision or repository-structure change must be recorded in
 this file. Examples include:
 
-- adding new top-level directories such as `src/`, `tests/`, or `scripts/`
-- changing the system decomposition or optimizer interface boundaries
+- adding new top-level directories
+- changing the system decomposition or interface boundaries
 - introducing new storage, evaluation, or workflow components
-
-Each update should briefly state what changed, why it changed, and which files or
-modules were affected.

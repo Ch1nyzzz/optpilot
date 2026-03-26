@@ -2,43 +2,67 @@
 
 ## Current Status
 
-- Repository is in the early research stage.
-- Literature review has been collected in `related_papers.md` and `papers/`.
-- Contributor guidance files `AGENTS.md` and `CLAUDE.md` are in place.
-- `memory_bank/` has been initialized to track goals, progress, and architecture.
+- Core OptPilot pipeline implemented and running on AG2 (MathChat) traces.
+- Offline pipeline validated: Diagnoser → Optimizer → Judge → Distiller → Library.
+- Models: GLM-5 (OptPilot system) + gpt-oss-120b (target MAS) via Together AI.
 
 ## Latest Update (2026-03-25)
 
-- 完成文献下载（21 篇论文到 `papers/`）
-- 深入分析了 AgentDebug、MAST、MAST+OpenEvolve blog
-- 确定 scope：聚焦 MAS 优化，不再追求 any-optimizer
-- 明确差异化定位：diagnosis-driven targeted repair（vs 盲进化 / 纯诊断）
-- 发现最近竞品：UC Berkeley ADRS 的 MAST + OpenEvolve 工作
-- 下载并分析 MAST-Data 数据集（1242 traces，其中 ChatDev 130 条）
-- 分析 ChatDev failure profile：top FM 是 Step Repetition (36.2%)
-- 分析 ChatDev v2 源码：**原生 YAML-driven DAG**，~28K 行 Python
-  - 整个 MAS 定义在一个 YAML 文件中（`ChatDev_v1.yaml`，~1000 行）
-  - nodes + edges 结构天然匹配我们的 DAG 抽象
-  - 修改只需改 YAML，不需要改 Python 代码
-  - DAG adapter 几乎不用写
+### Phase 1: 文献 + 设计 (完成)
+- 完成文献下载（21 篇论文）
+- 确定 scope：聚焦 MAS 优化
+- 明确差异化：diagnosis-driven targeted repair vs blind evolution
+- 实验设计文档完成（5 个实验 + ablation）
+
+### Phase 2: 实现 (进行中)
+- **核心 pipeline 代码完成**:
+  - `src/optpilot/`: config, llm (Together AI), models, tracking, data loader, fm_taxonomy
+  - `src/optpilot/dag/`: DAG 抽象 + ChatDev YAML adapter
+  - `src/optpilot/modules/`: Diagnoser, Optimizer, Judge, Distiller
+  - `src/optpilot/library/`: RepairLibrary (JSON 持久化)
+  - `experiments/`: offline_pipeline, online_pipeline, exp1-5
+
+- **MVP Target 切换为 AG2 (MathChat)**:
+  - AG2 在 MAST-Data 中有 597 条 traces（最多），trace 短（~5K chars）
+  - 2-agent 简单架构（Student + Assistant），无复杂 DAG
+  - 3 个 benchmark: GSM (223), Olympiad (206), MMLU (168)
+  - ChatDev 太复杂（trace 240K chars，YAML 1000行），暂时搁置
+
+- **离线 pipeline 验证成功**:
+  - 在 3 条 AG2 FM-1.3 traces 上完整跑通
+  - Diagnoser: GLM-5 成功定位到 agent + step + root cause
+  - Optimizer: 生成具体的 node_mutation / config_change repair actions
+  - Judge: 反事实评估 3/3 would_fix=True，confidence 0.90-0.95
+  - Library: 4 entries 存入 offline_ag2_library.json
+
+### 关键发现
+- GLM-5 是 reasoning model，需要大 max_tokens（8192+）来容纳 reasoning + output
+- AG2 trace ~5K chars 可直接全量发送 LLM，不需要 chunking
+- ChatDev trace ~240K chars 需要 chunking/摘要，GLM-5 处理极慢
 
 ## Key Research Decisions
 
 | 日期 | 决策 | 理由 |
 |------|------|------|
 | 2026-03-25 | 聚焦 MAS 而非 any optimizer | failure pattern 丰富，有现成 taxonomy 数据 |
-| 2026-03-25 | 不训练分类器 | 数据量太小，taxonomy 粒度不匹配，与 optimizer-agnostic 定位矛盾 |
-| 2026-03-25 | 核心差异化 = targeted repair vs blind evolution | MAST+OpenEvolve 已做了 taxonomy-as-reward，我们需要走 diagnosis→action 路线 |
-| 2026-03-25 | Target system = ChatDev (ProgramDev, GPT-4o) | MAST-Data 有 130 条 trace，源码是 YAML DAG 天然适配，MAST 论文有 case study baseline |
-| 2026-03-25 | Experience-Driven Repair Library 架构 | 蒸馏有效修复方案，跨 trace / 跨 MAS 检索复用 |
-| 2026-03-25 | 蒸馏粒度 deferred | 等 MVP 跑出真实修复过程后决定 |
+| 2026-03-25 | 核心差异化 = targeted repair vs blind evolution | MAST+OpenEvolve 做了 taxonomy-as-reward，我们走 diagnosis→action |
+| 2026-03-25 | MVP 切换到 AG2 (MathChat) | 597 条 trace，短 trace (5K chars)，简单 2-agent 架构 |
+| 2026-03-25 | 双层实验: offline + online | 对比反事实评估 vs 实跑验证的 gap |
+| 2026-03-25 | Together AI: GLM-5 (system) + gpt-oss-120b (target) | 统一 API |
+
+### Phase 3: 架构脱耦 (完成 2026-03-25)
+- **完全脱离 chatdev_v2 依赖**:
+  - 自研 DAGExecutor 轻量执行引擎 (`dag/executor.py`)
+  - MASDAG 自有序列化格式 (YAML)，直接 `to_dict()`/`from_dict()`/`save()`/`load()`
+  - OptPilotRunner 替代 ChatDevRunner，内置 Python 执行（无 subprocess）
+  - 删除所有 adapter (chatdev_adapter, ag2_adapter, appworld_adapter, hyperagent_adapter)
+  - ChatDev 工作流转为 `dags/chatdev.yaml` (MASDAG 格式)
+  - 更新所有实验管线和 orchestrator
 
 ## Next Steps
 
-1. **MVP Phase A**：在 MAST-Data 的 130 条 ChatDev trace 上做离线分析
-   - Diagnoser 细化 FM-1.3 (Step Repetition) 的 47 条 trace，定位到具体 agent 和 step
-   - Optimizer 生成候选 repair action
-2. **MVP Phase B**：搭建 ChatDev Runner，应用 repair 并验证
-3. **MVP Phase C**：验证方案跨 trace 复用
-4. 自动化 OptPilot pipeline
-5. 完整实验（Exp 1-5）+ 论文撰写
+1. **扩大离线实验**: 在更多 AG2 traces 上跑 offline pipeline (FM-1.3, FM-2.6, FM-1.1)
+2. **在线 Pipeline 验证**: 用 DAGExecutor 实际执行 MASDAG，收集在线 trace
+3. **Exp 5**: 对比 offline Judge 预测 vs online 实际结果
+4. **Exp 3**: 经验积累实验 (library hit rate 随 batch 增长)
+5. **更多 DAG 定义**: 为 AG2 MathChat 等创建 MASDAG YAML

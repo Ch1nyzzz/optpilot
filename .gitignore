@@ -5,8 +5,8 @@ __pycache__/
 .venv/
 venv/
 
-# Data
-data/
+# Data (top-level only)
+/data/
 *.parquet
 *.arrow
 
@@ -19,3 +19,9 @@ data/
 
 # HuggingFace cache
 .cache/
+
+# External dependencies (no longer needed)
+chatdev_v2/
+
+# Environment
+.env

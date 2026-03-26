@@ -1,0 +1,379 @@
+dag_id: ChatDev_v1
+metadata:
+  description: ChatDev multi-agent software development workflow with planning, coding, review, and testing loops.
+  start:
+    - USER
+    - Coding Phase Prompt for Assistant
+
+nodes:
+  # --- Loop Counters ---
+  - id: Code Complete All Phase Loop Counter
+    type: loop_counter
+    config:
+      max_iterations: 5
+
+  - id: Test Phase Loop Counter
+    type: loop_counter
+    config:
+      max_iterations: 3
+
+  - id: Code Review Phase Loop Counter
+    type: loop_counter
+    config:
+      max_iterations: 5
+
+  - id: Test Modification Phase Loop Counter
+    type: loop_counter
+    config:
+      max_iterations: 5
+
+  - id: Manual Phase Loop Counter
+    type: loop_counter
+    config:
+      max_iterations: 3
+
+  # --- Passthrough Nodes ---
+  - id: USER
+    type: passthrough
+
+  - id: PSEUDO
+    type: passthrough
+
+  - id: FINAL
+    type: passthrough
+
+  # --- Agent Nodes ---
+  - id: Programmer Coding
+    type: agent
+    role: Programmer
+    prompt: >-
+      You are Programmer at ChatDev. You can write/create computer software or
+      applications by providing a specific programming language. You have extensive
+      computing and coding experience in Python, Java, C, C++, HTML, CSS, JavaScript,
+      XML, SQL, PHP, etc. You will receive the task from user. To complete the task,
+      you must write code that appropriately solves the requested instruction.
+
+  - id: Programmer Code Complete
+    type: agent
+    role: Programmer
+    prompt: >-
+      You are Programmer at ChatDev. You implement all unimplemented methods and
+      classes. Check all files and implement everything needed for the software to
+      work correctly. If all files are fully implemented, output "<INFO> FINISHED".
+
+  - id: Programmer Code Review
+    type: agent
+    role: Programmer
+    prompt: >-
+      You are Programmer at ChatDev. You receive code review feedback and make
+      corrections to the code. Fix issues identified by the Code Reviewer.
+
+  - id: Code Reviewer
+    type: agent
+    role: Code Reviewer
+    prompt: >-
+      You are Code Reviewer at ChatDev. Review the code for: 1) all referenced
+      classes imported; 2) all methods implemented; 3) necessary comments; 4) no
+      potential bugs; 5) project conforms to user task; 6) logic correctness.
+      If the codes are perfect, return only "<INFO> Finished".
+
+  - id: Programmer Test Error Summary
+    type: agent
+    role: Programmer
+    prompt: >-
+      You are Programmer at ChatDev. You locate and summarize bugs from test
+      reports. You should NEVER write or edit codes, only locate and summarize
+      the bugs that cause the problem.
+
+  - id: Programmer Test Modification
+    type: agent
+    role: Programmer
+    prompt: >-
+      You are Programmer at ChatDev. You fix code based on test error summaries
+      and test feedback. You must call functions to save or edit the codes.
+
+  - id: Software Test Engineer
+    type: agent
+    role: Software Test Engineer
+    prompt: >-
+      You are Software Test Engineer at ChatDev. You run tests on the source code
+      using uv_run and report test results. If timeout with successful output,
+      that counts as a pass.
+
+  - id: Chief Executive Officer
+    type: agent
+    role: Chief Executive Officer
+    prompt: >-
+      You are Chief Executive Officer at ChatDev. Your responsibilities include
+      being an active decision-maker on users' demands, leader, manager, and
+      executor. Write specific solutions based on your expertise and needs.
+
+  - id: Chief Product Officer
+    type: agent
+    role: Chief Product Officer
+    prompt: >-
+      You are Chief Product Officer at ChatDev. You are responsible for product
+      design, strategy, vision, innovation, project management and marketing.
+      Write a detailed user manual (manual.md) for the software.
+
+  # --- Literal Nodes (Fixed Prompts) ---
+  - id: Coding Phase Prompt for Assistant
+    type: literal
+    prompt: >-
+      According to the new user's task: write the initial implementation of the
+      software in Python. Create all necessary files and implement the core
+      functionality.
+
+  - id: Code Complete Phase for Assistant
+    type: literal
+    prompt: >-
+      Check all files for unimplemented classes and methods. Implement everything
+      needed. If all files are fully implemented, output "<INFO> FINISHED".
+
+  - id: Code Review Comment Phase Prompt for Assistant
+    type: literal
+    prompt: >-
+      Review the code for: all classes imported, all methods implemented, comments,
+      no bugs, conforms to task, logic correctness. Propose your highest priority
+      comment and instructions to fix. If perfect, return "<INFO> Finished".
+
+  - id: Code Review Modification Phase Prompt for Assistant
+    type: literal
+    prompt: >-
+      Based on the Code Reviewer's feedback, fix the identified issues in the code.
+
+  - id: Test Error Summary Phase Prompt for Assistant
+    type: literal
+    prompt: >-
+      Run the code with tests and locate/summarize any bugs found. If timeout with
+      successful output, that counts as a pass. Only summarize bugs, do not edit code.
+
+  - id: Test Modification Phase Prompt for Assistant
+    type: literal
+    prompt: >-
+      Based on the test error summary, fix the identified bugs in the code.
+
+  - id: Test Modification Phase Prompt for User
+    type: literal
+    prompt: >-
+      Review the test modifications and verify the fixes are correct.
+
+  - id: Manual Phase Prompt for Assistant
+    type: literal
+    prompt: >-
+      Write a detailed user manual (manual.md) for the software including main
+      functions, how to install dependencies, and how to use it.
+
+  - id: Manual Phase Prompt for User
+    type: literal
+    prompt: >-
+      Review the user manual for completeness and accuracy.
+
+edges:
+  # --- Coding Phase ---
+  - from: Coding Phase Prompt for Assistant
+    to: Programmer Coding
+
+  - from: Programmer Coding
+    to: Code Complete Phase for Assistant
+    carry_data: false
+
+  # --- Code Complete Loop ---
+  - from: Code Complete Phase for Assistant
+    to: Programmer Code Complete
+
+  - from: Programmer Code Complete
+    to: Code Complete All Phase Loop Counter
+    carry_data: false
+
+  - from: Programmer Code Complete
+    to: Code Complete Phase for Assistant
+    carry_data: false
+
+  - from: Code Complete All Phase Loop Counter
+    to: Code Complete Phase for Assistant
+    carry_data: false
+
+  # Code Complete finished → Code Review
+  - from: Code Complete All Phase Loop Counter
+    to: Code Review Comment Phase Prompt for Assistant
+
+  - from: Programmer Code Complete
+    to: Code Review Comment Phase Prompt for Assistant
+    condition:
+      type: keyword
+      config:
+        any: ["<INFO> FINISHED"]
+        case_sensitive: true
+
+  # --- Code Review Loop ---
+  - from: Code Review Comment Phase Prompt for Assistant
+    to: Code Reviewer
+
+  - from: Code Reviewer
+    to: Code Review Modification Phase Prompt for Assistant
+
+  - from: Code Reviewer
+    to: Programmer Code Review
+    trigger: false
+
+  - from: Code Review Modification Phase Prompt for Assistant
+    to: Programmer Code Review
+
+  - from: Programmer Code Review
+    to: Code Review Comment Phase Prompt for Assistant
+
+  - from: Programmer Code Review
+    to: Code Review Phase Loop Counter
+
+  - from: Code Review Phase Loop Counter
+    to: Code Review Comment Phase Prompt for Assistant
+
+  # Code Review finished → Test
+  - from: Code Review Phase Loop Counter
+    to: Test Error Summary Phase Prompt for Assistant
+
+  - from: Code Reviewer
+    to: Test Error Summary Phase Prompt for Assistant
+    condition:
+      type: keyword
+      config:
+        any: ["<INFO> Finished"]
+        case_sensitive: true
+
+  # --- Test Loop ---
+  - from: PSEUDO
+    to: Test Error Summary Phase Prompt for Assistant
+
+  - from: PSEUDO
+    to: Test Phase Loop Counter
+
+  - from: Test Error Summary Phase Prompt for Assistant
+    to: Programmer Test Error Summary
+
+  - from: Test Error Summary Phase Prompt for Assistant
+    to: Programmer Test Modification
+    trigger: false
+
+  - from: Programmer Test Error Summary
+    to: Programmer Test Modification
+    trigger: false
+
+  - from: Programmer Test Error Summary
+    to: Test Modification Phase Prompt for Assistant
+
+  - from: Programmer Test Error Summary
+    to: Test Modification Phase Prompt for User
+
+  - from: Test Modification Phase Prompt for Assistant
+    to: Programmer Test Modification
+
+  - from: Test Modification Phase Prompt for User
+    to: Software Test Engineer
+    trigger: false
+
+  - from: Test Error Summary Phase Prompt for Assistant
+    to: Software Test Engineer
+    trigger: false
+    carry_data: false
+
+  - from: Programmer Test Modification
+    to: Software Test Engineer
+
+  - from: Software Test Engineer
+    to: Test Modification Phase Loop Counter
+
+  - from: Software Test Engineer
+    to: Programmer Test Modification
+
+  - from: Test Modification Phase Loop Counter
+    to: Programmer Test Modification
+
+  - from: Test Phase Loop Counter
+    to: Test Error Summary Phase Prompt for Assistant
+
+  - from: Test Modification Phase Loop Counter
+    to: PSEUDO
+
+  # Test exit conditions
+  - from: Programmer Test Modification
+    to: PSEUDO
+    condition:
+      type: keyword
+      config:
+        any: ["<INFO>"]
+        case_sensitive: true
+
+  - from: Software Test Engineer
+    to: PSEUDO
+    condition:
+      type: keyword
+      config:
+        any: ["<INFO>"]
+        case_sensitive: true
+
+  # --- Manual Phase ---
+  - from: PSEUDO
+    to: Manual Phase Prompt for User
+
+  - from: PSEUDO
+    to: Manual Phase Prompt for Assistant
+
+  - from: Manual Phase Prompt for Assistant
+    to: Chief Product Officer
+
+  - from: Manual Phase Prompt for User
+    to: Chief Executive Officer
+    trigger: false
+
+  - from: Chief Product Officer
+    to: Chief Executive Officer
+
+  - from: Chief Executive Officer
+    to: Chief Product Officer
+
+  - from: Chief Executive Officer
+    to: Manual Phase Loop Counter
+
+  - from: Manual Phase Loop Counter
+    to: Chief Product Officer
+
+  - from: Manual Phase Loop Counter
+    to: FINAL
+
+  # --- Context Edges (USER → all agents, non-trigger) ---
+  - from: USER
+    to: Programmer Coding
+    trigger: false
+
+  - from: USER
+    to: Programmer Code Complete
+    trigger: false
+
+  - from: USER
+    to: Code Reviewer
+    trigger: false
+
+  - from: USER
+    to: Programmer Code Review
+    trigger: false
+
+  - from: USER
+    to: Programmer Test Error Summary
+    trigger: false
+
+  - from: USER
+    to: Software Test Engineer
+    trigger: false
+
+  - from: USER
+    to: Programmer Test Modification
+    trigger: false
+
+  - from: USER
+    to: Chief Executive Officer
+    trigger: false
+
+  - from: USER
+    to: Chief Product Officer
+    trigger: false

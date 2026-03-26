@@ -1,0 +1,22 @@
+[project]
+name = "optpilot"
+version = "0.1.0"
+description = "Experience-Driven Repair System for Multi-Agent Systems"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.0",
+    "pyyaml>=6.0",
+    "datasets>=2.0",
+    "python-dotenv>=1.0",
+    "wandb>=0.16",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

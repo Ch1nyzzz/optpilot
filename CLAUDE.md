@@ -12,7 +12,7 @@ Core thesis: **diagnosis-driven targeted repair, not blind evolution**. Competit
 
 Five-module closed-loop:
 - **Orchestrator**: coordinates the loop, prioritizes which FM to fix
-- **Runner**: runs MAS, collects traces, manages DAG adapter (YAML read/write for ChatDev)
+- **Runner**: runs MAS via built-in DAGExecutor, collects execution traces
 - **Diagnoser**: MAST-based FM classification, fine-grained localization to agent + step
 - **Optimizer**: retrieves from Repair Library or generates new DAG repair actions via LLM
 - **Distiller**: validates repairs, distills successful fixes into Repair Library
@@ -21,10 +21,11 @@ MAS-as-DAG abstraction: any MAS = DAG(Nodes, Edges). Repair actions = DAG operat
 
 ## Target System
 
-**ChatDev v2** on ProgramDev benchmark with GPT-4o.
-- ChatDev is natively a YAML-driven DAG executor — the entire MAS is defined in `ChatDev_v1.yaml`
+**ChatDev workflow** on ProgramDev benchmark.
+- MAS workflow defined in `dags/chatdev.yaml` using our own MASDAG format
+- Self-contained execution via built-in DAGExecutor (no external ChatDev dependency)
 - MAST-Data has 130 ChatDev traces (93 with failures), top FM is Step Repetition (36.2%)
-- Modifications only require YAML changes, no Python code changes needed
+- Modifications = MASDAG repair actions applied in-memory
 
 ## Key Comparison Points
 
