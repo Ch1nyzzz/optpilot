@@ -4,28 +4,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**OptPilot** is a research project building an **Experience-Driven Repair System for Multi-Agent Systems (MAS)**. It diagnoses MAS failures using the MAST taxonomy, generates targeted repair actions on the MAS's DAG structure, validates repairs, and distills successful fixes into a reusable Repair Library.
+**OptPilot** is a research project building an **Experience-Driven Repair System for Multi-Agent Systems (MAS)**. It diagnoses MAS failures using the 6-group FM taxonomy (A-F), generates targeted YAML-level repair actions via Skill Workflows, validates repairs against ground-truth benchmarks, and accumulates experience (negatives + meta-evolution) across runs.
 
 Core thesis: **diagnosis-driven targeted repair, not blind evolution**. Competitors (MAST+OpenEvolve) use taxonomy as a better fitness signal for evolutionary search; we use diagnostic results to drive precise, targeted fixes.
 
 ## Architecture
 
-Five-module closed-loop:
-- **Orchestrator**: coordinates the loop, prioritizes which FM to fix
-- **Runner**: runs MAS via built-in DAGExecutor, collects execution traces
-- **Diagnoser**: MAST-based FM classification, fine-grained localization to agent + step
-- **Optimizer**: retrieves from Repair Library or generates new DAG repair actions via LLM
-- **Distiller**: validates repairs, distills successful fixes into Repair Library
+**Skill Workflow closed-loop** (replaced the original Optimizer+Distiller+WrapUp):
 
-MAS-as-DAG abstraction: any MAS = DAG(Nodes, Edges). Repair actions = DAG operations (node mutation/add/delete, edge mutation/rewire).
+- **Orchestrator** (`orchestrator.py`): runs MAS → diagnoses → ranks FM groups → dispatches Skill Workflows (parallel)
+- **Runner** (`modules/runner.py`): executes MASDAG via built-in DAGExecutor, collects traces with ground-truth scoring
+- **Diagnoser** (`modules/diagnoser.py`): 6-group FM classification (MiniMax M2.5) + agent/step localization
+- **Skill Workflows** (`skills/`): 6 Python classes (A-F), each a complete repair agent: analyze → evolve (inner loop, YAML-level) → validate → reflect (outer loop)
+- **SkillEvolver** (`skills/evolution.py`): when a Skill fails ≥3 times, LLM modifies Skill's own Python source
+
+MAS-as-DAG abstraction: any MAS = MASDAG(Nodes, Edges).
+- Node types: agent (LLM call), literal (fixed text), loop_counter (iteration control), passthrough
+- Edge attributes: trigger, condition (keyword matching), carry_data, loop (continue/exit)
+- Repair = YAML-level DAG modification by LLM
 
 ## Target System
 
-**ChatDev workflow** on ProgramDev benchmark.
-- MAS workflow defined in `dags/chatdev.yaml` using our own MASDAG format
-- Self-contained execution via built-in DAGExecutor (no external ChatDev dependency)
-- MAST-Data has 130 ChatDev traces (93 with failures), top FM is Step Repetition (36.2%)
-- Modifications = MASDAG repair actions applied in-memory
+**AG2 MathChat** (3-agent GroupChat) on official benchmarks.
+- DAG: `dags/ag2_mathchat.yaml` — Agent_Problem_Solver + Agent_Code_Executor + Agent_Verifier
+- Benchmarks: MMLU + AIME 2025 + OlympiadBench (ground-truth scoring)
+- Model: MiniMax M2.5 via Together AI (unified for execution + diagnosis)
+- Entry point: `python -m experiments.run_ag2_mathchat_skill --tasks 9 --rounds 3`
+
+## DAG Executor Conventions
+
+- Agent system prompts: executor reads `node.prompt` first, falls back to `node.role`
+- Literal content: executor reads `config.content` first, falls back to `node.prompt`
+- Agent params: supports both flat `config.temperature` and nested `config.params.temperature`
+- Loop counter edges: use explicit `loop: exit` or `loop: continue` annotations; topology inference as fallback
 
 ## Key Comparison Points
 
@@ -34,10 +45,6 @@ MAS-as-DAG abstraction: any MAS = DAG(Nodes, Edges). Repair actions = DAG operat
 | MAST/AgentFail | Taxonomy + dataset, no repair | We close the loop with automated repair |
 | AgentDebug | Inference-time re-rollout for single agent | We do design-time MAS optimization |
 | MAST+OpenEvolve | Taxonomy as fitness for blind evolution | We do diagnosis → targeted repair |
-
-## Current State
-
-Research phase with concrete experiment design. Data (MAST-Data) analyzed, target system (ChatDev) source code analyzed. Ready for MVP implementation.
 
 ## Project Memory
 

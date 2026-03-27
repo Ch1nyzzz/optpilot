@@ -3,12 +3,12 @@ from __future__ import annotations
 from optpilot.dag.core import DAGEdge, DAGNode, MASDAG
 from optpilot.library.repair_library import RepairLibrary
 from optpilot.models import (
-    FMCategory, FMLabel, FMLocalization, FMProfile, MASTrace, RepairAction,
+    FMLabel, FMLocalization, FMProfile, MASTrace, RepairAction,
     RepairCandidate, RepairEntry, RepairType,
 )
-from optpilot.modules.distiller import Distiller
+from optpilot.modules._legacy.distiller import Distiller
 from optpilot.modules.runner import OptPilotRunner
-from optpilot.modules.wrap_up import WrapUp
+from optpilot.modules._legacy.wrap_up import WrapUp
 from optpilot.orchestrator import split_proposal_validation_indices
 
 
@@ -18,8 +18,8 @@ def _profile(trace_id: int, fm_id: str | None, cause: str = "loop repeats") -> F
         return profile
     profile.labels[fm_id] = FMLabel(
         fm_id=fm_id,
-        fm_name="Step Repetition",
-        category=FMCategory.FC1,
+        fm_name="Execution Loop / Stuck",
+        category=fm_id,
         present=True,
     )
     profile.localization[fm_id] = FMLocalization(
@@ -46,12 +46,12 @@ def _trace(trace_id: int, score: float, latency_s: float = 1.0) -> MASTrace:
 
 
 def test_distill_online_requires_pass_improvement(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr("optpilot.modules.distiller.call_llm", lambda *args, **kwargs: "use when loops repeat")
+    monkeypatch.setattr("optpilot.modules._legacy.distiller.call_llm", lambda *args, **kwargs: "use when loops repeat")
 
     library = RepairLibrary(tmp_path / "online_library.json")
     distiller = Distiller(library)
     candidate = RepairCandidate(
-        fm_id="1.3",
+        fm_id="B",
         description="Add a verifier before loop continuation.",
         actions=[
             RepairAction(
@@ -64,12 +64,12 @@ def test_distill_online_requires_pass_improvement(monkeypatch, tmp_path) -> None
     )
 
     before_traces = [_trace(1, 0.8, 2.0), _trace(2, 0.4, 2.2)]
-    before_profiles = [_profile(1, "1.3"), _profile(2, None)]
+    before_profiles = [_profile(1, "B"), _profile(2, None)]
     after_traces = [_trace(1, 0.5, 2.6), _trace(2, 0.3, 2.8)]
     after_profiles = [_profile(1, None), _profile(2, None)]
 
     entry = distiller.distill_online(
-        "1.3",
+        "B",
         candidate,
         before_traces,
         before_profiles,
@@ -86,18 +86,18 @@ def test_distill_online_requires_pass_improvement(monkeypatch, tmp_path) -> None
 
 def test_split_proposal_validation_indices_keeps_holdout_positive() -> None:
     profiles = [
-        _profile(0, "1.3"),
-        _profile(1, "1.3"),
+        _profile(0, "B"),
+        _profile(1, "B"),
         _profile(2, None),
-        _profile(3, "1.3"),
+        _profile(3, "B"),
     ]
 
-    proposal_indices, validation_indices = split_proposal_validation_indices("1.3", profiles) or ([], [])
+    proposal_indices, validation_indices = split_proposal_validation_indices("B", profiles) or ([], [])
 
     assert proposal_indices
     assert validation_indices
     assert set(proposal_indices).isdisjoint(validation_indices)
-    assert any("1.3" in profiles[idx].active_fm_ids() for idx in validation_indices)
+    assert any("B" in profiles[idx].active_fm_ids() for idx in validation_indices)
 
 
 def test_runner_uses_success_proxy_score() -> None:
@@ -121,7 +121,7 @@ def test_runner_uses_success_proxy_score() -> None:
 
 def test_wrap_up_combines_positive_and_negative_hints(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
-        "optpilot.modules.wrap_up.call_llm_json",
+        "optpilot.modules._legacy.wrap_up.call_llm_json",
         lambda *args, **kwargs: {
             "skills": [{
                 "when_to_use": "Use when programmer-reviewer loops repeat without a verifier.",
@@ -134,26 +134,26 @@ def test_wrap_up_combines_positive_and_negative_hints(monkeypatch, tmp_path) -> 
 
     library = RepairLibrary(tmp_path / "wrap_library.json")
     positive = RepairEntry(
-        fm_id="1.3",
+        fm_id="B",
         status="validated",
         success_rate=0.8,
-        candidate=RepairCandidate(fm_id="1.3", description="Add verifier"),
+        candidate=RepairCandidate(fm_id="B", description="Add verifier"),
         root_cause_pattern="Programmer-reviewer loop repeats without acceptance criteria.",
     )
     negative = RepairEntry(
-        fm_id="1.3",
+        fm_id="B",
         status="failed",
-        candidate=RepairCandidate(fm_id="1.3", description="Just lower the loop limit"),
+        candidate=RepairCandidate(fm_id="B", description="Just lower the loop limit"),
         root_cause_pattern="Loop repeats because the task was misunderstood.",
     )
     library.add(positive)
     library.add(negative)
 
-    wrapped = WrapUp(library).wrap_fm("1.3", source_mas="AG2")
+    wrapped = WrapUp(library).wrap_fm("B", source_mas="AG2")
 
     assert len(wrapped) == 1
     assert wrapped[0].entry_kind == "wrapped"
     assert wrapped[0].when_not_to_use.startswith("Avoid when")
     assert wrapped[0].counter_entry_ids == [negative.entry_id]
     assert "Do not only reduce max_iterations" in wrapped[0].avoid_actions[0]
-    assert library.search("1.3")[0].entry_kind == "wrapped"
+    assert library.search("B")[0].entry_kind == "wrapped"

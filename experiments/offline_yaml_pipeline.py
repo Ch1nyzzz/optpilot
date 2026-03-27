@@ -9,7 +9,7 @@ MAST-Data → Diagnose (all FMs, 并行) → YAML Optimize → Judge (并行) �
 
 Usage:
     python -m experiments.offline_yaml_pipeline --yaml dags/ag2_mathchat.yaml --max-traces 10
-    python -m experiments.offline_yaml_pipeline --yaml dags/ag2_mathchat.yaml --fm 1.3 --benchmark GSM --workers 30
+    python -m experiments.offline_yaml_pipeline --yaml dags/ag2_mathchat.yaml --group B --benchmark GSM --workers 30
 """
 
 import argparse
@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from optpilot.config import LIBRARY_DIR, OFFLINE_YAML_MAX_WORKERS, RESULTS_DIR
-from optpilot.data.fm_taxonomy import FM_NAMES
+from optpilot.data.fm_taxonomy_6group import GROUP_NAMES
 from optpilot.data.loader import load_traces, print_fm_stats
 from optpilot.library.repair_library import RepairLibrary
 from optpilot.modules.diagnoser import Diagnoser
@@ -170,7 +170,7 @@ async def _process_one_trace(
 async def _run_offline_yaml_pipeline_async(
     yaml_path: str,
     mas_name: str = "AG2",
-    fm_filter: str | None = None,
+    group_filter: str | None = None,
     benchmark: str | None = None,
     max_traces: int | None = None,
     max_workers: int = OFFLINE_YAML_MAX_WORKERS,
@@ -182,12 +182,13 @@ async def _run_offline_yaml_pipeline_async(
 
     print(f"=== OptPilot Offline YAML Pipeline (Concurrent) ===")
     print(f"MAS: {mas_name}, YAML: {yaml_path.name}, workers: {max_workers}")
-    if fm_filter:
-        print(f"FM filter: FM-{fm_filter}")
+    if group_filter:
+        normalized = group_filter.upper()
+        print(f"Group filter: Group-{normalized} ({GROUP_NAMES.get(normalized, '?')})")
     print()
 
     # 1. Load traces
-    traces = load_traces(mas_name, fm_filter=fm_filter, benchmark=benchmark)
+    traces = load_traces(mas_name, fm_filter=group_filter, benchmark=benchmark)
     # 只保留有 active FM 的 trace
     traces = [t for t in traces if t.active_fm_ids()]
     if max_traces:
@@ -266,7 +267,8 @@ async def _run_offline_yaml_pipeline_async(
         print(f"Avg time per trace: {avg_time:.1f}s")
 
     # Save results
-    out_file = RESULTS_DIR / f"offline_yaml_{mas_name.lower()}.json"
+    suffix = f"_{group_filter.lower()}" if group_filter else ""
+    out_file = RESULTS_DIR / f"offline_yaml_{mas_name.lower()}{suffix}.json"
     with open(out_file, "w") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"Results saved: {out_file}")
@@ -275,7 +277,7 @@ async def _run_offline_yaml_pipeline_async(
 def run_offline_yaml_pipeline(
     yaml_path: str,
     mas_name: str = "AG2",
-    fm_filter: str | None = None,
+    group_filter: str | None = None,
     benchmark: str | None = None,
     max_traces: int | None = None,
     max_workers: int = OFFLINE_YAML_MAX_WORKERS,
@@ -284,7 +286,7 @@ def run_offline_yaml_pipeline(
         _run_offline_yaml_pipeline_async(
             yaml_path=yaml_path,
             mas_name=mas_name,
-            fm_filter=fm_filter,
+            group_filter=group_filter,
             benchmark=benchmark,
             max_traces=max_traces,
             max_workers=max_workers,
@@ -296,7 +298,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="OptPilot Offline YAML Pipeline (Concurrent)")
     parser.add_argument("--yaml", required=True, help="Path to MAS YAML config")
     parser.add_argument("--mas", default="AG2", help="MAS name for trace loading")
-    parser.add_argument("--fm", default=None, help="Filter traces by FM (optional)")
+    parser.add_argument("--group", default=None, help="Filter traces by failure group (optional)")
     parser.add_argument("--benchmark", default=None, help="Filter by benchmark")
     parser.add_argument("--max-traces", type=int, default=None, help="Max traces")
     parser.add_argument(
@@ -310,7 +312,7 @@ if __name__ == "__main__":
     run_offline_yaml_pipeline(
         yaml_path=args.yaml,
         mas_name=args.mas,
-        fm_filter=args.fm,
+        group_filter=args.group,
         benchmark=args.benchmark,
         max_traces=args.max_traces,
         max_workers=args.workers,

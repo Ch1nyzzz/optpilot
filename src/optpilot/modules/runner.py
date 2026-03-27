@@ -26,7 +26,9 @@ class OptPilotRunner(MASRunner):
         dag: MASDAG | None = None,
         dag_path: str | Path | None = None,
         model: str = TARGET_MODEL,
+        benchmark_name: str = "MathChat",
         score_fn: Callable[[str, MASDAG, ExecutionTrace], float | None] | None = None,
+        benchmark_name_resolver: Callable[[str], str] | None = None,
         max_steps: int = 200,
         timeout: int = 600,
     ):
@@ -37,6 +39,7 @@ class OptPilotRunner(MASRunner):
             dag_path: Path to a MASDAG YAML file.
             model: Default LLM model for agent nodes.
             score_fn: Optional benchmark scorer. Should return a higher-is-better score.
+            benchmark_name_resolver: Optional per-task benchmark resolver.
             max_steps: Safety limit on total node executions.
             timeout: Overall execution timeout in seconds.
         """
@@ -48,7 +51,9 @@ class OptPilotRunner(MASRunner):
             self._dag = None
 
         self.model = model
+        self.benchmark_name = benchmark_name
         self.score_fn = score_fn
+        self.benchmark_name_resolver = benchmark_name_resolver
         self.max_steps = max_steps
         self.timeout = timeout
 
@@ -96,12 +101,13 @@ class OptPilotRunner(MASRunner):
 
         task_success = self._infer_task_success(run_dag, exec_trace)
         task_score = self._score_trace(task_prompt, run_dag, exec_trace, task_success)
+        benchmark_name = self._resolve_benchmark_name(task_prompt)
 
         return MASTrace(
             trace_id=-1,
             mas_name=run_dag.dag_id or "OptPilot",
             llm_name=self.model,
-            benchmark_name="ProgramDev",
+            benchmark_name=benchmark_name,
             trajectory=exec_trace.to_trajectory(),
             task_key=task_prompt[:50],
             task_success=task_success,
@@ -151,3 +157,8 @@ class OptPilotRunner(MASRunner):
             if score is not None:
                 return float(score)
         return 1.0 if task_success else 0.0
+
+    def _resolve_benchmark_name(self, task_prompt: str) -> str:
+        if self.benchmark_name_resolver is not None:
+            return self.benchmark_name_resolver(task_prompt)
+        return self.benchmark_name

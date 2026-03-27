@@ -2,21 +2,25 @@ from __future__ import annotations
 
 import pytest
 
-from optpilot.models import MASTrace
+from optpilot.models import FMLocalization, MASTrace
 from optpilot.modules.diagnoser import Diagnoser
 
 
 @pytest.mark.anyio
 async def test_diagnoser_adiagnose_uses_async_localization(monkeypatch) -> None:
-    async def fake_acall_llm_json(messages, model=None, temperature=0.2, max_tokens=8192):
-        return {
-            "agent": "assistant",
-            "step": "review",
-            "context": "ctx",
-            "root_cause": "cause",
-        }
+    async def fake_aclassify(self, trace, model=None):
+        return {"A": False, "B": True, "C": False, "D": False, "E": False, "F": True}
 
-    monkeypatch.setattr("optpilot.modules.diagnoser.acall_llm_json", fake_acall_llm_json)
+    async def fake_alocalize_group(self, trace, gid, trace_content):
+        return FMLocalization(
+            agent="assistant",
+            step="review",
+            context=f"{gid}-ctx",
+            root_cause=f"{gid}-cause",
+        )
+
+    monkeypatch.setattr(Diagnoser, "_aclassify", fake_aclassify)
+    monkeypatch.setattr(Diagnoser, "_alocalize_group", fake_alocalize_group)
 
     diagnoser = Diagnoser(max_workers=4)
     trace = MASTrace(
@@ -25,11 +29,10 @@ async def test_diagnoser_adiagnose_uses_async_localization(monkeypatch) -> None:
         llm_name="MiniMaxAI/MiniMax-M2.5",
         benchmark_name="GSM",
         trajectory="trace body",
-        mast_annotation={"1.3": 1, "3.3": 1},
     )
 
     profile = await diagnoser.adiagnose(trace)
 
-    assert sorted(profile.localization) == ["1.3", "3.3"]
-    assert profile.localization["1.3"].agent == "assistant"
-    assert profile.localization["3.3"].root_cause == "cause"
+    assert sorted(profile.localization) == ["B", "F"]
+    assert profile.localization["B"].agent == "assistant"
+    assert profile.localization["F"].root_cause == "F-cause"

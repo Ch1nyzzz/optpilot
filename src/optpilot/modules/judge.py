@@ -7,7 +7,7 @@ without actually re-running the MAS.
 from __future__ import annotations
 
 from optpilot.config import JUDGE_MODEL
-from optpilot.data.fm_taxonomy import FM_DEFINITIONS
+from optpilot.data.fm_taxonomy_6group import GROUP_DEFINITIONS as FM_DEFINITIONS
 from optpilot.llm import acall_llm_json, call_llm_json
 from optpilot.models import (
     FMProfile, JudgeVerdict, MASTrace, RepairCandidate,

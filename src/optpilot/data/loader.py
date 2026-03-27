@@ -5,6 +5,7 @@ from collections import Counter
 from pathlib import Path
 
 from optpilot.config import MAST_DATA_CACHE
+from optpilot.data.fm_taxonomy_6group import mast_annotation_to_groups
 from optpilot.models import MASTrace
 
 
@@ -28,6 +29,7 @@ def load_all_traces() -> list[MASTrace]:
 
     traces = []
     for item in raw:
+        group_annotation = mast_annotation_to_groups(item["mast_annotation"])
         trace = MASTrace(
             trace_id=item["trace_id"],
             mas_name=item["mas_name"],
@@ -35,7 +37,7 @@ def load_all_traces() -> list[MASTrace]:
             benchmark_name=item["benchmark_name"],
             trajectory=item["trace"]["trajectory"],
             task_key=item["trace"].get("key", ""),
-            mast_annotation=item["mast_annotation"],
+            mast_annotation=group_annotation,
         )
         traces.append(trace)
     return traces
@@ -47,14 +49,15 @@ def load_traces(
     benchmark: str | None = None,
     llm_filter: str | None = None,
 ) -> list[MASTrace]:
-    """Load traces filtered by MAS framework, FM, benchmark, and LLM."""
+    """Load traces filtered by MAS framework, failure group, benchmark, and LLM."""
     traces = [t for t in load_all_traces() if t.mas_name == mas_name]
     if benchmark:
         traces = [t for t in traces if t.benchmark_name == benchmark]
     if llm_filter:
         traces = [t for t in traces if t.llm_name == llm_filter]
     if fm_filter:
-        traces = [t for t in traces if t.mast_annotation.get(fm_filter, 0) == 1]
+        group_id = fm_filter.strip().upper()
+        traces = [t for t in traces if t.mast_annotation.get(group_id, 0) == 1]
     return traces
 
 
@@ -64,7 +67,7 @@ def load_chatdev_traces(fm_filter=None, benchmark=None):
 
 
 def print_fm_stats(traces: list[MASTrace]) -> None:
-    """Print FM distribution statistics."""
+    """Print failure-group distribution statistics."""
     total = len(traces)
     fm_counts: Counter[str] = Counter()
     for t in traces:
@@ -74,6 +77,6 @@ def print_fm_stats(traces: list[MASTrace]) -> None:
 
     clean = sum(1 for t in traces if not t.active_fm_ids())
     print(f"Total traces: {total}, Clean: {clean} ({clean/total*100:.1f}%)")
-    print("FM distribution:")
+    print("Group distribution:")
     for fm_id, cnt in fm_counts.most_common():
-        print(f"  FM-{fm_id}: {cnt} ({cnt/total*100:.1f}%)")
+        print(f"  Group-{fm_id}: {cnt} ({cnt/total*100:.1f}%)")

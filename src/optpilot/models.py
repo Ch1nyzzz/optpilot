@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-
-# === FM Categories ===
-
-class FMCategory(str, Enum):
-    FC1 = "FC1"  # System Design
-    FC2 = "FC2"  # Inter-Agent Misalignment
-    FC3 = "FC3"  # Task Verification
+if TYPE_CHECKING:
+    from optpilot.dag.core import MASDAG
 
 
 # === Trace ===
@@ -27,7 +23,7 @@ class MASTrace:
     benchmark_name: str    # "ProgramDev"
     trajectory: str        # full conversation log
     task_key: str = ""     # task identifier
-    mast_annotation: dict[str, int] = field(default_factory=dict)  # fm_id -> 0/1
+    mast_annotation: dict[str, int] = field(default_factory=dict)  # group_id -> 0/1
     task_success: bool | None = None
     task_score: float | None = None
     latency_s: float | None = None
@@ -42,7 +38,7 @@ class MASTrace:
 class FMLabel:
     fm_id: str
     fm_name: str
-    category: FMCategory
+    category: str  # group ID: "A"-"F"
     present: bool
     confidence: float = 1.0
 
@@ -135,6 +131,90 @@ class JudgeVerdict:
     would_fix: bool = False
     confidence: float = 0.0
     reasoning: str = ""
+
+
+# === Serialization ===
+
+# === Skill Workflow Models ===
+
+
+@dataclass
+class EvolveResult:
+    """Return value of Skill.evolve(): modified DAG + full change evidence."""
+
+    dag: MASDAG
+    analysis_text: str          # LLM reasoning
+    modified_yaml: str          # complete modified YAML
+    change_description: str     # one-line summary
+    actions_taken: list[str] = field(default_factory=list)  # human-readable diffs
+
+
+@dataclass
+class ReflectInsight:
+    """Return value of Skill.reflect(): failure analysis + lesson."""
+
+    round_index: int
+    fm_id: str
+    changes_attempted: list[str]    # from evolve_history
+    before_fm_rate: float
+    after_fm_rate: float
+    before_pass_rate: float
+    after_pass_rate: float
+    failure_reason: str
+    lesson: str
+    timestamp: str = ""
+
+
+@dataclass
+class SkillBudget:
+    """Computation budget tracker for a Skill run."""
+
+    max_llm_calls: int = 30
+    max_batch_runs: int = 10
+    max_wall_time_s: float = 600.0
+    used_llm_calls: int = 0
+    used_batch_runs: int = 0
+    start_time: float = 0.0
+
+    def check(self) -> bool:
+        """Return False if budget exhausted."""
+        if self.used_llm_calls >= self.max_llm_calls:
+            return False
+        if self.used_batch_runs >= self.max_batch_runs:
+            return False
+        if self.start_time > 0 and time.time() - self.start_time > self.max_wall_time_s:
+            return False
+        return True
+
+
+@dataclass
+class AnalysisResult:
+    """Return value of Skill.analyze()."""
+
+    fm_id: str
+    fm_rate: float
+    common_agents: list[str] = field(default_factory=list)
+    common_steps: list[str] = field(default_factory=list)
+    root_cause_clusters: list[str] = field(default_factory=list)
+    dag_summary: str = ""
+    evidence_snippets: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class SkillResult:
+    """Return value of BaseSkill.run()."""
+
+    success: bool
+    fm_id: str
+    dag: MASDAG | None = None
+    inner_iterations: int = 0
+    outer_rounds: int = 0
+    final_fm_rate: float = 1.0
+    final_pass_rate: float = 0.0
+    negatives: list[ReflectInsight] = field(default_factory=list)
+    budget_used: SkillBudget | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # === Serialization ===

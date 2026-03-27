@@ -5,177 +5,178 @@
 ```
 optpilot/
 ├── src/optpilot/              # Core library
-│   ├── config.py              # Global configuration (env, models, paths)
-│   ├── models.py              # Core data models (MASTrace, FMProfile, RepairAction, etc.)
-│   ├── llm.py                 # LLM interface (Together AI)
-│   ├── orchestrator.py        # Online optimization loop controller
+│   ├── config.py              # Global configuration (env, models, paths, rate limits)
+│   ├── models.py              # Core data models (MASTrace, FMProfile, RepairAction,
+│   │                          #   EvolveResult, ReflectInsight, SkillBudget,
+│   │                          #   AnalysisResult, SkillResult)
+│   ├── llm.py                 # LLM interface (Together AI, sync + async, rate limiting)
+│   ├── orchestrator.py        # Skill dispatch loop (diagnose → parallel skills → adopt DAG)
 │   ├── registry.py            # Runner factory
 │   ├── tracking.py            # Experiment tracking (W&B integration)
+│   ├── skills/                # Skill Workflows (one per FM group)
+│   │   ├── base.py            # BaseSkill ABC + GenericSkill + run() template
+│   │   ├── registry.py        # FM group → Skill class mapping + dynamic loading
+│   │   ├── negatives.py       # ReflectInsight persistence (JSON per FM group)
+│   │   ├── evolution.py       # Skill meta-evolution (LLM modifies Skill code)
+│   │   └── skill_{a-f}.py     # 6 concrete skills (A-F)
 │   ├── dag/                   # DAG abstraction and execution
-│   │   ├── core.py            # MASDAG, DAGNode, DAGEdge + serialization
-│   │   └── executor.py        # DAGExecutor: lightweight workflow engine
-│   ├── modules/               # Core optimization modules
+│   │   ├── core.py            # MASDAG, DAGNode, DAGEdge + YAML serialization
+│   │   └── executor.py        # DAGExecutor: lightweight BFS workflow engine
+│   ├── modules/               # Core modules
 │   │   ├── base_runner.py     # MASRunner abstract base
-│   │   ├── runner.py          # OptPilotRunner (built-in DAG execution)
-│   │   ├── diagnoser.py       # FM diagnosis via LLM
-│   │   ├── optimizer.py       # RepairCandidate generation
-│   │   ├── judge.py           # Offline counterfactual evaluation
-│   │   ├── distiller.py       # Distill repairs into reusable skills
-│   │   └── yaml_optimizer.py  # YAML-based optimization
+│   │   ├── runner.py          # OptPilotRunner (DAG execution + benchmark scoring)
+│   │   ├── diagnoser.py       # FM diagnosis via LLM (6-group, concurrent)
+│   │   ├── judge.py           # Offline counterfactual evaluation (optional)
+│   │   ├── yaml_optimizer.py  # YAML-based optimization (reference)
+│   │   └── _legacy/           # Replaced by Skill Workflows
 │   ├── library/
-│   │   └── repair_library.py  # Persistent repair library (JSON)
+│   │   └── repair_library.py  # Persistent repair library (JSON, buffered flush)
 │   └── data/
-│       ├── fm_taxonomy.py     # FM definitions and taxonomy
-│       └── loader.py          # Load MAST-Data traces
+│       ├── fm_taxonomy_6group.py # Canonical A-F failure-group taxonomy
+│       ├── loader.py          # Load MAST-Data traces (normalizes to A-F)
+│       └── benchmarks.py      # Official benchmark loaders + ground-truth scorers
+│                              # (MMLU, AIME 2025, OlympiadBench)
 ├── dags/                      # MASDAG workflow definitions (YAML)
-│   └── chatdev.yaml           # ChatDev v1 workflow
+│   ├── ag2_mathchat.yaml      # AG2 MathChat 3-agent GroupChat (primary)
+│   └── chatdev.yaml           # ChatDev v1 workflow (reference)
 ├── experiments/               # Experiment pipelines
-├── tests/                     # Regression tests for executor and persistence behavior
-├── library_store/             # Repair library storage
-├── results/                   # Experiment results
+│   ├── run_ag2_mathchat_skill.py  # Primary entry: AG2 × benchmarks × Skill Workflows
+│   └── ...                    # offline/online pipelines, ablations
+├── data/annotations/          # Blind/manual labeling packs for 6-group evaluation
+├── tests/                     # Regression tests
+├── library_store/             # Repair library + negatives + evolved skills
+│   ├── negatives/             # Per-FM-group ReflectInsight history (JSON)
+│   ├── evolved_skills/        # Meta-evolved Skill source files
+│   ├── offline_hints/         # Offline repair hints
+│   ├── offline_skills/        # Offline wrapped skills
+│   ├── online_hints/          # Online repair hints
+│   └── online_skills/         # Online wrapped skills
+├── results/                   # Experiment results and metrics
 └── memory_bank/               # Project documentation
 ```
 
-## Core Architecture Decision: MAS-as-DAG
+## Core Architecture: MAS-as-DAG
 
 任何 MAS 系统统一表示为 MASDAG（有向图，支持循环）：
-- **DAGNode** = Agent (role, prompt, config) | Literal | LoopCounter | Passthrough
-- **DAGEdge** = Communication (source→target, trigger, condition, carry_data)
+- **DAGNode** = Agent (role, prompt, config) | Literal (config.content) | LoopCounter (config.max_iterations) | Passthrough
+- **DAGEdge** = Communication (source→target, trigger, condition, carry_data, loop)
 - **RepairAction** = DAG 操作 (node mutation/add/delete, edge mutation/rewire, config change)
 
 MASDAG 是唯一的核心表示，既用于定义、又用于执行、又用于修复。
 
-## DAG Executor (2026-03-25)
+## DAG Executor
 
 自研轻量执行引擎，完全脱离 ChatDev v2 依赖：
-- 基于 MASDAG 直接执行工作流（无需外部 subprocess）
-- 支持四种节点类型：agent (LLM调用), literal (固定文本), loop_counter (循环控制), passthrough (透传)
-- 支持 keyword 条件边和 trigger/non-trigger 边
-- 执行产出 ExecutionTrace，转为 MASTrace 供诊断
 
 执行流程：
-1. 确定 start nodes，注入 task prompt
+1. 确定 start nodes（metadata.start），注入 task prompt
 2. BFS 式执行 ready queue 中的节点
-3. 每个 agent 节点通过 llm_fn 调用 LLM
-4. 根据边条件传播输出到下游节点
-5. loop_counter 节点管理循环次数和退出
+3. Agent 节点：`node.prompt or node.role` 作为 system prompt，支持 `config.params` 嵌套参数
+4. Literal 节点：`config.content` 或 `node.prompt` 作为输出
+5. 根据边条件（keyword matching）传播输出到下游节点
+6. loop_counter 节点管理循环次数和退出
 
 Loop counter 约定：
-- 优先读取 edge config 中的 `loop: continue|exit`
-- 若未显式标注，则执行器按 trigger-edge 拓扑判断：目标节点若能回到当前 loop counter，则视为 continue edge，否则视为 exit edge
-- 因此 loop counter 不再在同一轮同时触发“继续循环”和“退出下一阶段”
+- 优先读取 edge config 中的 `loop: continue|exit` 显式标注
+- 若未显式标注，则拓扑推断：目标节点若能经 trigger edge 回到当前 loop counter，则为 continue edge，否则为 exit edge
+- 当 continue_edges 和 exit_edges 都为空时（无法识别循环结构），才 fallback 到所有 trigger edge
+- 仅有 exit_edges 而无 continue_edges 时（被动计数器），count < max_iter 时不触发任何下游
 
-## OptPilot Agent 架构
+## Skill Workflow Architecture (2026-03-26)
 
-五个模块组成 closed-loop：
+取代了原来的 Optimizer+Distiller+WrapUp：
 
 | 模块 | 职责 |
 |------|------|
-| **Orchestrator** | 协调整个 loop，决定优先修哪个 FM，何时停止 |
-| **Runner** | 用 DAGExecutor 直接执行 MASDAG，收集执行轨迹 |
-| **Diagnoser** | 基于 MAST 的 FM 分类标注，细化定位到具体 agent 和 step |
-| **Optimizer** | 检索 Repair Library 历史方案或用 LLM 生成新的 DAG repair action |
-| **Distiller** | 验证修复有效后蒸馏方案存入 Repair Library |
+| **Orchestrator** | 诊断 → 按 FM 频率分发给 Skill Workflows（支持并行） |
+| **Runner** | 用 DAGExecutor 执行 MASDAG，收集 trace + benchmark scoring |
+| **Diagnoser** | 6-group FM 分类 (MiniMax M2.5) + agent/step 定位 |
+| **Skill Workflows (A-F)** | 6 个 Python 类，每个 FM group 一个完整的修复 agent |
+| **SkillEvolver** | Skill 连续失败 ≥3 次 → LLM 修改 Skill 源码 → 动态加载 |
 
-## Repair Library Persistence (2026-03-25)
+### Skill 内部闭环
 
-Repair Library 仍然使用 JSON 持久化，但写盘策略改为 buffered flush：
-- `add()` / `update_stats()` 默认只更新内存并标记 dirty
-- 流程末尾显式调用 `flush()` 落盘，减少实验中每条 entry 都全量重写 JSON 的开销
-- 进程退出时也会执行兜底 flush
-
-## LLM Concurrency Control (2026-03-25)
-
-LLM 调用层现在按模型家族做全局限流：
-- 每个模型家族共享一个全局 `Semaphore`，限制进程内并发请求数
-- 同时维护 60 秒滑动窗口，限制该模型家族的 RPM
-- 当前内置家族是 `MiniMax M2.5`、`GLM-5` 和默认兜底配置
-- 具体阈值通过环境变量控制，而不是散落在各个 `ThreadPoolExecutor` 里
-
-高并发链路补充：
-- `llm.py` 现在同时提供同步 `OpenAI` 和异步 `AsyncOpenAI` 客户端
-- 高并发实验主链路优先走异步接口 `acall_llm` / `acall_llm_json`
-- `offline_yaml_pipeline` 已从 `ThreadPoolExecutor` 迁移到 `asyncio.gather`
-- `Diagnoser`、`Judge`、`YAMLOptimizer` 提供 async 方法，作为高并发路径的默认实现
-
-数据流：
 ```
-Runner(dag) → traces → Diagnoser → profiles → Optimizer → candidate
-                                                              ↓
-                                                         apply_repair → new_dag
-                                                              ↓
-                                                    Runner(new_dag) → new_traces
-                                                              ↓
-                                                         Distiller → library
+for outer_round in range(MAX_OUTER_ROUNDS=3):
+    analyze(dag, traces, profiles, negatives) → AnalysisResult
+    for inner_iter in range(MAX_INNER_ITERS=5):
+        evolve(dag, analysis, negatives, history) → EvolveResult (YAML-level)
+        run_batch(proposal_tasks) → new_traces
+        diagnose → fm_rate
+        if fm_rate < 0.2 or no_improvement: break
+    run_batch(validation_tasks, original_dag) → before_val  # cached at start
+    run_batch(validation_tasks, repaired_dag) → after_val
+    if judge(before_val, after_val): return success
+    reflect(...) → ReflectInsight → negatives.append(insight)
 ```
 
-## Online Validation Protocol (2026-03-26)
+关键设计：
+- **Validation 基线缓存**：before_val_traces 在整个 run() 生命周期只算一次
+- **pass_rate 使用 task_score**：优先使用 ground-truth benchmark 评分（而非 task_success 完成率）
+- **Judge 条件**：FM rate 下降 AND pass_rate 上升
+- **SkillBudget**：max_llm_calls=30 / max_batch_runs=10 / max_wall_time_s=600
 
-在线蒸馏现在不再是“同一批任务提案、同一批任务验证”的自闭环，而是显式拆成 proposal / validation 两个子集：
-- 先在当前 DAG 上跑整批任务并诊断，选择出现次数至少为 2 的目标 FM
-- proposal 子集只使用部分命中该 FM 的 trace，用于聚合证据并生成 repair
-- validation 子集与 proposal 完全不重叠，且至少保留一个命中该 FM 的 holdout trace
-- repaired DAG 只在 validation 子集上重跑并判定成败
+### 并行 Skill 执行
 
-验证标准也从“目标 FM 计数下降”收紧为：
-- 目标 FM 在 holdout validation 上下降
-- `pass` rate 上升
+不同 FM group 的 Skill 可以并行优化（ThreadPoolExecutor），各自工作在 DAG 的独立 deepcopy 上。
+Orchestrator 收集所有结果，选最佳成功结果采纳到主 DAG。
 
-其中 `pass` 优先来自外部 benchmark scorer 或评测器；若未提供显式 scorer，则 Runner 退化为 success proxy：
-- 到达 DAG `metadata.success_nodes` 指定节点即视为成功
-- 若未显式配置且存在 `FINAL` 节点，则执行到 `FINAL` 视为成功
-- 默认 score = `1.0`（成功）/ `0.0`（失败）
+### Meta-Evolution
 
-同时保留复杂度观测指标但不作为主判据：
-- 平均运行时间 `latency_s`
-- `validation_metrics.runtime_delta_s`
+当 Skill 连续失败 ≥3 次：
+1. SkillEvolver 读取 Skill 的 Python 源码 + 累积 ReflectInsight
+2. LLM 生成修改版代码
+3. compile() 语法检查 → 保存到 library_store/evolved_skills/
+4. importlib 动态加载替换注册表中的旧版本
 
-相关影响：
-- `Optimizer` 在 online repair 时改为基于多个 trace/profile 聚合 fault evidence，而不是单条代表 trace
-- `Distiller` 在线蒸馏 pattern 时会看 before/after holdout evidence，不再只看 repair 文本
-- `RepairLibrary.search()` 默认排除 `failed` entries，减少坏 skill 被再次检索到的概率
+## Online Validation Protocol
 
-## Skill Wrap-Up (2026-03-26)
+proposal / validation 分离：
+- proposal 子集：命中目标 FM 的 trace 的前半部分，用于聚合证据并生成 repair
+- validation 子集：所有剩余 trace（不与 proposal 重叠），至少保留一个命中该 FM 的 holdout
 
-Repair Library 现在区分两类条目：
-- `hint`: 原始离线/在线蒸馏结果，保留正例和反例
-- `wrapped`: 批次级 wrap-up 后的 canonical skill，用于优先检索
+验证标准：
+- 目标 FM 在 validation 上下降
+- pass_rate 上升（使用 ground-truth benchmark scorer）
 
-wrap-up 规则：
-- 按 `fm_id` 聚合 raw hints
-- validated hints 和高置信 unvalidated hints 作为支持证据
-- failed hints 和低置信 unvalidated hints 作为反例边界
-- 输出少量 canonical skills，每条都同时包含：
-  - `root_cause_pattern`: when to use
-  - `when_not_to_use`: failure boundary
-  - `validation_metrics.recommended_actions`
-  - `avoid_actions`
+## LLM Concurrency Control
 
-检索策略：
-- 若某个 FM 已有 `wrapped` skills，则优先只检索 wrapped entries
-- 若还没有 wrap-up 产物，再回退到 raw hints
+按模型家族做全局限流：
+- 每个模型家族共享 Semaphore（限并发）+ 60 秒滑动窗口（限 RPM）
+- 内置家族：MiniMax M2.5 (96 并发)、GLM-5 (48 并发)、default (64 并发)
+- 同时提供同步和异步客户端
 
-存储边界：
-- offline hints 单独保存在 `library_store/offline_hints/`
-- offline wrapped skills 单独保存在 `library_store/offline_skills/`
-- online 产物不与 offline 共用这两类路径
-- 因此 offline 不再把 raw hints 和 wrapped skills 混在同一个 JSON 文件里
+## 6-Group Taxonomy
+
+唯一 active taxonomy：
+- **A**: Instruction Non-Compliance
+- **B**: Execution Loop / Stuck
+- **C**: Context Loss
+- **D**: Communication Failure
+- **E**: Task Drift / Reasoning Error
+- **F**: Verification Failure
+
+定义: `src/optpilot/data/fm_taxonomy_6group.py`
+FM Classifier: MiniMax M2.5（100 条 blind trace 校准，与人类专家容忍率 89.9%–98.0%）
+
+## AG2 MathChat DAG
+
+基于 MAST 论文 Appendix L 的官方 3-agent GroupChat：
+- `dags/ag2_mathchat.yaml`
+- Agents: Agent_Problem_Solver, Agent_Code_Executor, Agent_Verifier
+- Turn Counter (max=5)，仅 `loop: exit` 边到 FINAL（被动计数器，count < max 时不触发下游）
+- 终止: `SOLUTION_FOUND` 关键词 → FINAL
+
+## Official Benchmarks
+
+在线评测使用官方 benchmark + ground-truth scoring：
+- `cais/mmlu`: 多选知识题
+- `opencompass/AIME2025`: 竞赛数学（整数答案）
+- `lscpku/OlympiadBench-official` (`maths_en_no_proof`): 开放式数学题
+
+评分: 从 `\boxed{...}` 提取答案，精确匹配或 SymPy 符号匹配。
 
 ## Architecture Change Policy
 
 Any meaningful architecture decision or repository-structure change must be recorded in
-this file. Examples include:
-
-- adding new top-level directories
-- changing the system decomposition or interface boundaries
-- introducing new storage, evaluation, or workflow components
-
-## Experiment Variants (2026-03-26)
-
-The repository now keeps two separate prompt-optimization experiment variants under `experiments/`:
-- `experiments/evolve_classifier/`: fine-grained 14-label FM prediction
-- `experiments/evolve_classifier_3label/`: coarse 3-label multi-label prediction (`C1/C2/C3`)
-
-The 3-label variant reuses the same trace dataset as the 14-label variant but applies a
-different evaluator and output schema. This keeps coarse-category experiments isolated
-from the fine-grained setup while avoiding duplicate label files.
+this file.

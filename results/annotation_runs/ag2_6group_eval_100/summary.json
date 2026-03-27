@@ -1,0 +1,55 @@
+{
+  "pack_path": "data/annotations/ag2_6group_eval_100_blind.jsonl",
+  "n_samples": 100,
+  "workers_per_model": 8,
+  "models": {
+    "minimax": {
+      "model_id": "MiniMaxAI/MiniMax-M2.5",
+      "elapsed_s": 125.7,
+      "label_counts": {
+        "A": 1,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 24,
+        "F": 16
+      },
+      "nonempty_predictions": 32,
+      "all_false_predictions": 68,
+      "n_errors": 0,
+      "output_path": "results/annotation_runs/ag2_6group_eval_100/minimax.json"
+    },
+    "deepseekr1": {
+      "model_id": "deepseek-ai/DeepSeek-R1",
+      "elapsed_s": 275.2,
+      "label_counts": {
+        "A": 2,
+        "B": 2,
+        "C": 0,
+        "D": 3,
+        "E": 25,
+        "F": 12
+      },
+      "nonempty_predictions": 29,
+      "all_false_predictions": 71,
+      "n_errors": 0,
+      "output_path": "results/annotation_runs/ag2_6group_eval_100/deepseekr1.json"
+    },
+    "glm5": {
+      "model_id": "zai-org/GLM-5",
+      "elapsed_s": 1075.5,
+      "label_counts": {
+        "A": 4,
+        "B": 2,
+        "C": 0,
+        "D": 1,
+        "E": 24,
+        "F": 15
+      },
+      "nonempty_predictions": 24,
+      "all_false_predictions": 76,
+      "n_errors": 3,
+      "output_path": "results/annotation_runs/ag2_6group_eval_100/glm5.json"
+    }
+  }
+}

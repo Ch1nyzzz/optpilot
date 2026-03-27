@@ -1,7 +1,7 @@
 """Online Pipeline - Phase B: Run MAS → Diagnose → Optimize → Verify → Distill.
 
 Usage:
-    python -m experiments.online_pipeline --dag dags/chatdev.yaml --tasks 3 --rounds 3 --fm 1.3
+    python -m experiments.online_pipeline --dag dags/chatdev.yaml --tasks 3 --rounds 3 --group B
 """
 
 import argparse
@@ -29,7 +29,7 @@ def run_online_pipeline(
     dag_path: str | None = None,
     n_tasks: int = 3,
     max_rounds: int = 3,
-    target_fm: str | None = None,
+    target_group: str | None = None,
     use_wandb: bool = False,
 ):
     """Run the full online optimization pipeline."""
@@ -43,14 +43,14 @@ def run_online_pipeline(
 
     print(f"=== OptPilot Online Pipeline ===")
     print(f"DAG: {dag.dag_id}, Tasks: {n_tasks}, Max rounds: {max_rounds}")
-    if target_fm:
-        print(f"Target FM: FM-{target_fm}")
+    if target_group:
+        print(f"Target group: Group-{target_group}")
     print()
 
     summary = orchestrator.optimize(
         tasks=tasks,
         max_rounds=max_rounds,
-        target_fm=target_fm,
+        target_fm=target_group,
     )
 
     print(f"\n=== Summary ===")
@@ -58,7 +58,7 @@ def run_online_pipeline(
     print(f"Library: {summary['library_stats']}")
     for r in summary["results"]:
         print(
-            f"  Round {r['round']}: FM-{r['target_fm']} {r['before_count']}→{r['after_count']}, "
+            f"  Round {r['round']}: Group-{r['target_fm']} {r['before_count']}→{r['after_count']}, "
             f"pass {r['before_pass_rate']:.3f}→{r['after_pass_rate']:.3f}, "
             f"runtime {r['before_runtime_s']:.2f}s→{r['after_runtime_s']:.2f}s "
             f"({r['repair_status']})"
@@ -70,11 +70,11 @@ if __name__ == "__main__":
     parser.add_argument("--dag", default=None, help="Path to MASDAG YAML file")
     parser.add_argument("--tasks", type=int, default=3, help="Number of tasks")
     parser.add_argument("--rounds", type=int, default=3, help="Max optimization rounds")
-    parser.add_argument("--fm", default=None, help="Target specific FM id")
+    parser.add_argument("--group", default=None, help="Target specific failure group id")
     parser.add_argument("--wandb", action="store_true", help="Enable W&B tracking")
     args = parser.parse_args()
 
     run_online_pipeline(
         dag_path=args.dag, n_tasks=args.tasks, max_rounds=args.rounds,
-        target_fm=args.fm, use_wandb=args.wandb,
+        target_group=args.group, use_wandb=args.wandb,
     )

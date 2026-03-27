@@ -1,8 +1,8 @@
 """Offline Pipeline - Phase A: MAST-Data → Diagnose → Optimize → Judge → Library.
 
 Usage:
-    python -m experiments.offline_pipeline --mas AG2 --fm 1.3 --max-traces 5
-    python -m experiments.offline_pipeline --mas ChatDev --dag dags/chatdev.yaml --fm 2.6
+    python -m experiments.offline_pipeline --mas AG2 --group B --max-traces 5
+    python -m experiments.offline_pipeline --mas ChatDev --dag dags/chatdev.yaml --group E
 """
 
 import argparse
@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from optpilot.config import DAG_DIR, OFFLINE_HINTS_DIR, OFFLINE_SKILLS_DIR
 from optpilot.dag.core import MASDAG
-from optpilot.data.fm_taxonomy import FM_NAMES
+from optpilot.data.fm_taxonomy_6group import GROUP_NAMES
 from optpilot.data.loader import load_traces, print_fm_stats
 from optpilot.library.repair_library import RepairLibrary
 from optpilot.modules.diagnoser import Diagnoser
@@ -27,28 +27,29 @@ from optpilot.tracking import Tracker
 
 def run_offline_pipeline(
     mas_name: str = "AG2",
-    fm_id: str = "1.3",
+    group_id: str = "B",
     dag_path: str | None = None,
     benchmark: str | None = None,
     max_traces: int | None = None,
     use_wandb: bool = False,
 ):
     """Run offline analysis pipeline on MAST-Data traces."""
+    group_id = group_id.upper()
     print(f"=== OptPilot Offline Pipeline ===")
-    print(f"MAS: {mas_name}, Target FM: FM-{fm_id} ({FM_NAMES.get(fm_id, '?')})")
+    print(f"MAS: {mas_name}, Target group: Group-{group_id} ({GROUP_NAMES.get(group_id, '?')})")
 
     # 1. Load traces
-    traces = load_traces(mas_name, fm_filter=fm_id, benchmark=benchmark)
+    traces = load_traces(mas_name, fm_filter=group_id, benchmark=benchmark)
     if max_traces:
         traces = traces[:max_traces]
-    print(f"Loaded {len(traces)} traces with FM-{fm_id}")
+    print(f"Loaded {len(traces)} traces with Group-{group_id}")
     if traces:
         avg_len = sum(len(t.trajectory) for t in traces) / len(traces)
         print(f"Avg trajectory length: {avg_len:.0f} chars")
     print()
 
-    hints_path = OFFLINE_HINTS_DIR / mas_name.lower() / f"fm_{fm_id.replace('.', '_')}_hints.json"
-    skills_path = OFFLINE_SKILLS_DIR / mas_name.lower() / f"fm_{fm_id.replace('.', '_')}_skills.json"
+    hints_path = OFFLINE_HINTS_DIR / mas_name.lower() / f"group_{group_id.lower()}_hints.json"
+    skills_path = OFFLINE_SKILLS_DIR / mas_name.lower() / f"group_{group_id.lower()}_skills.json"
 
     # 2. Initialize modules with optional DAG context
     hints_library = RepairLibrary(hints_path)
@@ -57,7 +58,7 @@ def run_offline_pipeline(
     optimizer = Optimizer(hints_library)
     judge = Judge()
     distiller = Distiller(hints_library)
-    tracker = Tracker(f"offline_{mas_name}_{fm_id}", use_wandb=use_wandb)
+    tracker = Tracker(f"offline_{mas_name}_{group_id}", use_wandb=use_wandb)
 
     # Load DAG if path provided
     dag = None
@@ -72,32 +73,32 @@ def run_offline_pipeline(
 
         # Diagnose
         print(f"  [1/4] Diagnosing...")
-        profile = diagnoser.diagnose(trace, target_fm=fm_id)
-        loc = profile.localization.get(fm_id)
+        profile = diagnoser.diagnose(trace, target_group=group_id)
+        loc = profile.localization.get(group_id)
         if loc:
             print(f"    Agent: {loc.agent}, Step: {loc.step}")
             print(f"    Root cause: {loc.root_cause[:120]}...")
 
         # Generate repair (pass DAG if available for architecture context)
         print(f"  [2/4] Generating repair...")
-        candidate = optimizer.generate_repair(fm_id, profile, trace, dag=dag)
+        candidate = optimizer.generate_repair(group_id, profile, trace, dag=dag)
         print(f"    Repair: {candidate.description[:100]}")
         print(f"    Actions: {len(candidate.actions)}, Source: {candidate.source}")
 
         # Judge evaluation
         print(f"  [3/4] Judging (counterfactual)...")
-        verdict = judge.evaluate(trace, fm_id, candidate, profile)
+        verdict = judge.evaluate(trace, group_id, candidate, profile)
         print(f"    Would fix: {verdict.would_fix} (confidence: {verdict.confidence:.2f})")
 
         # Distill
         print(f"  [4/4] Distilling to library...")
-        entry = distiller.distill_offline(fm_id, candidate, verdict, source_mas=mas_name)
+        entry = distiller.distill_offline(group_id, candidate, verdict, source_mas=mas_name)
         print(f"    Entry: {entry.entry_id} status={entry.status}")
 
         # Track
         tracker.log({
             "trace_id": trace.trace_id,
-            "fm_id": fm_id,
+            "fm_id": group_id,
             "would_fix": verdict.would_fix,
             "confidence": verdict.confidence,
             "repair_source": candidate.source,
@@ -124,19 +125,19 @@ def run_offline_pipeline(
     print(f"Judge positive rate: {would_fix_count}/{len(traces)}")
 
     wrap_up = WrapUp(hints_library, output_library=skills_library)
-    wrapped = wrap_up.wrap_fm(fm_id, source_mas=mas_name)
-    print(f"Wrapped skills for FM-{fm_id}: {len(wrapped)}")
+    wrapped = wrap_up.wrap_fm(group_id, source_mas=mas_name)
+    print(f"Wrapped skills for Group-{group_id}: {len(wrapped)}")
 
     hints_library.flush()
     skills_library.flush()
-    tracker.save_local(f"offline_{mas_name}_{fm_id}.json")
+    tracker.save_local(f"offline_{mas_name}_{group_id}.json")
     print("Done!")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="OptPilot Offline Pipeline")
     parser.add_argument("--mas", default="AG2", help="MAS framework (default: AG2)")
-    parser.add_argument("--fm", default="1.3", help="Target FM id (default: 1.3)")
+    parser.add_argument("--group", default="B", help="Target failure group id (default: B)")
     parser.add_argument("--dag", default=None, help="Path to MASDAG YAML file")
     parser.add_argument("--benchmark", default=None, help="Filter by benchmark")
     parser.add_argument("--max-traces", type=int, default=None, help="Max traces to process")
@@ -144,6 +145,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     run_offline_pipeline(
-        mas_name=args.mas, fm_id=args.fm, dag_path=args.dag,
+        mas_name=args.mas, group_id=args.group, dag_path=args.dag,
         benchmark=args.benchmark, max_traces=args.max_traces, use_wandb=args.wandb,
     )

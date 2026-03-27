@@ -11,7 +11,6 @@ Produces a structured execution trace for diagnosis.
 
 from __future__ import annotations
 
-import json
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -233,9 +232,9 @@ class DAGExecutor:
                         loop_counts[target_id] = count
                         continue_edges, exit_edges = self._get_loop_edges(target_id)
                         selected_edges = exit_edges if count >= max_iter else continue_edges
-                        if not selected_edges:
+                        if not selected_edges and not continue_edges and not exit_edges:
                             # Fall back to legacy behavior for DAGs that do not encode
-                            # a recognizable loop structure.
+                            # a recognizable loop structure at all.
                             selected_edges = [
                                 lc_edge
                                 for lc_edge in self._outgoing.get(target_id, [])
@@ -296,8 +295,9 @@ class DAGExecutor:
             return self._execute_agent(node, input_text)
 
         elif node.node_type == "literal":
-            # Literal nodes output their fixed content
-            return node.prompt
+            # Literal nodes output their fixed content.
+            # Support both top-level `prompt` and `config.content` for flexibility.
+            return node.config.get("content", node.prompt) or node.prompt
 
         elif node.node_type == "passthrough":
             # Pass input through unchanged
@@ -313,17 +313,21 @@ class DAGExecutor:
     def _execute_agent(self, node: DAGNode, input_text: str) -> str:
         """Execute an agent node via LLM call."""
         messages = []
-        if node.prompt:
-            messages.append({"role": "system", "content": node.prompt})
+        system_prompt = node.prompt or node.role
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": input_text})
 
         model = node.config.get("model") or self.model
 
+        # Support both flat config keys and nested config.params (AG2 YAML style)
+        params = node.config.get("params", {})
         kwargs: dict[str, Any] = {}
-        if "temperature" in node.config:
-            kwargs["temperature"] = node.config["temperature"]
-        if "max_tokens" in node.config:
-            kwargs["max_tokens"] = node.config["max_tokens"]
+        for key in ("temperature", "max_tokens"):
+            if key in node.config:
+                kwargs[key] = node.config[key]
+            elif key in params:
+                kwargs[key] = params[key]
 
         return self.llm_fn(messages, model=model, **kwargs)
 

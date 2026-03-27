@@ -1,0 +1,1287 @@
+{
+  "model": "default",
+  "n_samples": 60,
+  "seed": 42,
+  "elapsed_s": 54.5,
+  "per_group": {
+    "A": {
+      "tp": 1,
+      "fp": 14,
+      "fn": 16,
+      "tn": 29,
+      "precision": 0.067,
+      "recall": 0.059,
+      "f1": 0.062,
+      "accuracy": 0.5,
+      "support_pos": 17,
+      "support_neg": 43
+    },
+    "B": {
+      "tp": 0,
+      "fp": 3,
+      "fn": 27,
+      "tn": 30,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "accuracy": 0.5,
+      "support_pos": 27,
+      "support_neg": 33
+    },
+    "C": {
+      "tp": 0,
+      "fp": 3,
+      "fn": 2,
+      "tn": 55,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "accuracy": 0.917,
+      "support_pos": 2,
+      "support_neg": 58
+    },
+    "D": {
+      "tp": 1,
+      "fp": 3,
+      "fn": 12,
+      "tn": 44,
+      "precision": 0.25,
+      "recall": 0.077,
+      "f1": 0.118,
+      "accuracy": 0.75,
+      "support_pos": 13,
+      "support_neg": 47
+    },
+    "E": {
+      "tp": 12,
+      "fp": 14,
+      "fn": 19,
+      "tn": 15,
+      "precision": 0.462,
+      "recall": 0.387,
+      "f1": 0.421,
+      "accuracy": 0.45,
+      "support_pos": 31,
+      "support_neg": 29
+    },
+    "F": {
+      "tp": 12,
+      "fp": 15,
+      "fn": 14,
+      "tn": 19,
+      "precision": 0.444,
+      "recall": 0.462,
+      "f1": 0.453,
+      "accuracy": 0.517,
+      "support_pos": 26,
+      "support_neg": 34
+    }
+  },
+  "macro": {
+    "precision": 0.204,
+    "recall": 0.164,
+    "f1": 0.176
+  },
+  "per_trace": [
+    {
+      "trace_id": 22,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 163,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 137,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 1,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 39,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": true,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 50,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 71,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": true,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 49,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": true,
+        "B": true,
+        "C": true,
+        "D": true,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 186,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 1,
+        "D": 0,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 70,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 108,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 192,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 1,
+        "D": 0,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": true,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 143,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 1,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 156,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 55,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 59,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": true,
+        "B": true,
+        "C": true,
+        "D": true,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 23,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 17,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": true,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 117,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 158,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 6,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 1,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 139,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 1,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 8,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 1,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 97,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 0,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 71,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 26,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 28,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 40,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 1,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 195,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 1,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": true,
+        "B": true,
+        "C": true,
+        "D": true,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 26,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 159,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 1,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 147,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 1,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 11,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 1,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 160,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": true,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 141,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 1,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": true,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 91,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 1,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 55,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 86,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 31,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": true,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 24,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": true,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 62,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 154,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 1,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 75,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 67,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 1,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": true,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 7,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 107,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": true,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 96,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": true,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 151,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 56,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 1,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 88,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 87,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": true,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 129,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 1,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 114,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 0,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 35,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 169,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 1,
+        "C": 0,
+        "D": 0,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 92,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 1,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 57,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 1,
+        "B": 0,
+        "C": 0,
+        "D": 1,
+        "E": 1,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 165,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 1,
+        "E": 1,
+        "F": 1
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    },
+    {
+      "trace_id": 20,
+      "benchmark": "Olympiad",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": true,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": true,
+        "F": true
+      }
+    },
+    {
+      "trace_id": 23,
+      "benchmark": "MMLU",
+      "gt_groups": {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0,
+        "F": 0
+      },
+      "pred_groups": {
+        "A": false,
+        "B": false,
+        "C": false,
+        "D": false,
+        "E": false,
+        "F": false
+      }
+    }
+  ]
+}

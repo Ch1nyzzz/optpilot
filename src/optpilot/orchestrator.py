@@ -1,47 +1,46 @@
-"""Orchestrator - controls the online optimization loop.
+"""Orchestrator — controls the online optimization loop.
 
-Coordinates: Runner → Diagnoser → Optimizer → Runner (verify) → Distiller
+Coordinates: Runner → Diagnoser → dispatch to Skill Workflows (parallel).
 """
 
 from __future__ import annotations
 
+import copy
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from statistics import mean
 from typing import TypeVar
 
 from optpilot.config import LIBRARY_DIR
 from optpilot.dag.core import MASDAG
-from optpilot.library.repair_library import RepairLibrary
-from optpilot.models import FMProfile
+from optpilot.data.fm_taxonomy_6group import GROUP_NAMES
+from optpilot.models import FMProfile, SkillBudget, SkillResult
 from optpilot.modules.base_runner import MASRunner
 from optpilot.modules.diagnoser import Diagnoser
-from optpilot.modules.distiller import Distiller
-from optpilot.modules.optimizer import Optimizer
+from optpilot.skills.evolution import SkillEvolver
+from optpilot.skills.negatives import NegativesStore
+from optpilot.skills.registry import get_skill, load_evolved_skill
 from optpilot.tracking import Tracker
 
 
-def get_highest_frequency_fm(profiles: list[FMProfile], min_support: int = 1) -> str | None:
-    """Find the most frequent active FM across profiles."""
+def rank_fm_groups(
+    profiles: list[FMProfile],
+    target_fm: str | None = None,
+    min_support: int = 2,
+) -> list[tuple[str, int]]:
+    """Rank FM groups by frequency (descending). Returns [(fm_id, count), ...]."""
     fm_counts: Counter[str] = Counter()
     for p in profiles:
         for fm_id in p.active_fm_ids():
             fm_counts[fm_id] += 1
+
+    if target_fm:
+        count = fm_counts.get(target_fm, 0)
+        return [(target_fm, count)] if count >= min_support else []
+
     eligible = [(fm_id, count) for fm_id, count in fm_counts.items() if count >= min_support]
-    if not eligible:
-        return None
     eligible.sort(key=lambda item: item[1], reverse=True)
-    return eligible[0][0]
-
-
-def _mean_metric(values: list[float | None]) -> float:
-    present = [v for v in values if v is not None]
-    return mean(present) if present else 0.0
-
-
-def _pass_rate(traces: list) -> float:
-    values = [1.0 if trace.task_success else 0.0 for trace in traces if trace.task_success is not None]
-    return mean(values) if values else 0.0
+    return eligible
 
 
 T = TypeVar("T")
@@ -78,179 +77,223 @@ def split_proposal_validation_indices(
 
 
 class Orchestrator:
-    """Online optimization loop controller."""
+    """Online optimization loop controller — dispatches to Skill Workflows."""
 
     def __init__(
         self,
         runner: MASRunner,
         dag: MASDAG,
-        library_path: str | Path | None = None,
         use_wandb: bool = False,
+        negatives_dir: str | Path | None = None,
+        evolved_dir: str | Path | None = None,
+        parallel: bool = True,
     ):
         self.runner = runner
         self.dag = dag
-        self.library = RepairLibrary(library_path or LIBRARY_DIR / "online_library.json")
         self.diagnoser = Diagnoser()
-        self.optimizer = Optimizer(self.library)
-        self.distiller = Distiller(self.library)
-        self.tracker = Tracker("online_optimization", use_wandb=use_wandb)
-        self.touched_fms: set[str] = set()
+        self.tracker = Tracker("skill_optimization", use_wandb=use_wandb)
+        self.negatives_store = NegativesStore(Path(negatives_dir or LIBRARY_DIR / "negatives"))
+        self.evolver = SkillEvolver(Path(evolved_dir or LIBRARY_DIR / "evolved_skills"))
+        self.parallel = parallel
 
     def optimize(
         self,
         tasks: list[str],
         max_rounds: int = 5,
         target_fm: str | None = None,
+        budget: SkillBudget | None = None,
     ) -> dict:
-        """Run the full online optimization loop.
+        """Run the full online optimization loop with Skill Workflows.
 
-        Args:
-            tasks: List of task prompts to run.
-            max_rounds: Maximum optimization rounds.
-            target_fm: If set, only target this specific FM.
-
-        Returns:
-            Summary dict with results.
+        Skills for different FM groups can run in parallel since they each
+        work on independent copies of the DAG.
         """
         current_dag = self.dag
 
-        print(f"=== OptPilot Online Optimization ===")
-        print(f"Tasks: {len(tasks)}, Max rounds: {max_rounds}")
+        print(f"=== OptPilot Skill Workflow Optimization ===")
+        print(f"Tasks: {len(tasks)}, Max rounds: {max_rounds}, Parallel: {self.parallel}")
         print()
 
-        results = []
+        results: list[dict] = []
+
         for round_i in range(max_rounds):
             print(f"=== Round {round_i + 1}/{max_rounds} ===")
 
-            # 1. Run MAS
-            print(f"  [1/6] Running MAS on {len(tasks)} tasks...")
+            # 1. Run MAS + Diagnose
+            print(f"  [1/2] Running MAS on {len(tasks)} tasks + diagnosing...")
             traces = self.runner.run_batch(tasks, dag=current_dag)
-
-            # 2. Diagnose
-            print(f"  [2/6] Diagnosing traces...")
             profiles = self.diagnoser.diagnose_batch(traces)
 
-            # 3. Find target FM
-            if target_fm:
-                top_fm = target_fm
-                fm_count = sum(1 for p in profiles if top_fm in p.active_fm_ids())
+            # 2. Rank FM groups
+            fm_ranking = rank_fm_groups(profiles, target_fm)
+            if not fm_ranking:
+                print(f"  No active FM groups with ≥2 traces. Done!")
+                break
+
+            print(f"  Active FM groups: {', '.join(f'{fid}({c})' for fid, c in fm_ranking)}")
+
+            # 3. Prepare skill dispatches
+            skill_jobs: list[dict] = []
+            for fm_id, _fm_count in fm_ranking:
+                split = split_proposal_validation_indices(fm_id, profiles)
+                if split is None:
+                    print(f"  Skipping Group-{fm_id}: cannot split proposal/validation.")
+                    continue
+
+                proposal_idx, validation_idx = split
+                prior_negatives = self.negatives_store.load(fm_id)
+
+                skill_jobs.append({
+                    "fm_id": fm_id,
+                    "proposal_idx": proposal_idx,
+                    "validation_idx": validation_idx,
+                    "prior_negatives": prior_negatives,
+                })
+
+            if not skill_jobs:
+                print(f"  No dispatchable skills. Done!")
+                break
+
+            # 4. Dispatch skills (parallel or sequential)
+            if self.parallel and len(skill_jobs) > 1:
+                skill_results = self._run_parallel(
+                    skill_jobs, current_dag, tasks, traces, profiles, budget,
+                )
             else:
-                top_fm = get_highest_frequency_fm(profiles, min_support=2)
-                fm_count = sum(1 for p in profiles if top_fm and top_fm in p.active_fm_ids())
+                skill_results = self._run_sequential(
+                    skill_jobs, current_dag, tasks, traces, profiles, budget,
+                )
 
-            if not top_fm or fm_count == 0:
-                print(f"  No active FMs found. Optimization complete!")
-                break
-            if fm_count < 2:
-                print(f"  FM-{top_fm} appears in only {fm_count} trace. Need at least 2 for holdout validation.")
-                break
+            # 5. Collect results — pick the best successful skill
+            best_result: SkillResult | None = None
+            for fm_id, result in skill_results:
+                fm_name = GROUP_NAMES.get(fm_id, fm_id)
+                round_entry = {
+                    "round": round_i + 1,
+                    "fm_id": fm_id,
+                    "fm_name": fm_name,
+                    "success": result.success,
+                    "inner_iterations": result.inner_iterations,
+                    "outer_rounds": result.outer_rounds,
+                    "final_fm_rate": result.final_fm_rate,
+                    "final_pass_rate": result.final_pass_rate,
+                    "n_negatives": len(result.negatives),
+                }
+                results.append(round_entry)
+                self.tracker.log(round_entry, step=len(results) - 1)
 
-            print(f"  Target FM: FM-{top_fm} ({fm_count}/{len(profiles)} traces)")
+                if result.success:
+                    print(f"  Group-{fm_id} ({fm_name}): REPAIRED "
+                          f"(fm={result.final_fm_rate:.2f}, pass={result.final_pass_rate:.3f})")
+                    if best_result is None or result.final_pass_rate > best_result.final_pass_rate:
+                        best_result = result
+                else:
+                    print(f"  Group-{fm_id} ({fm_name}): FAILED after {result.outer_rounds} rounds")
+                    # Persist negatives for future runs
+                    self.negatives_store.extend(fm_id, result.negatives)
+                    self.evolver.record_failure(fm_id)
 
-            split = split_proposal_validation_indices(top_fm, profiles)
-            if split is None:
-                print(f"  Unable to build disjoint proposal/validation splits for FM-{top_fm}.")
-                break
-            proposal_indices, validation_indices = split
+                    # Meta-evolution check
+                    if self.evolver.should_evolve(fm_id):
+                        print(f"  Triggering meta-evolution for Skill-{fm_id}...")
+                        all_neg = self.negatives_store.load(fm_id)
+                        skill = get_skill(fm_id)
+                        evolved_path = self.evolver.evolve_skill(fm_id, skill, all_neg)
+                        if evolved_path:
+                            print(f"    Evolved skill saved: {evolved_path}")
+                            load_evolved_skill(fm_id, evolved_path)
 
-            proposal_traces = _take_by_index(traces, proposal_indices)
-            proposal_profiles = _take_by_index(profiles, proposal_indices)
-            validation_tasks = _take_by_index(tasks, validation_indices)
-            before_validation_traces = _take_by_index(traces, validation_indices)
-            before_validation_profiles = _take_by_index(profiles, validation_indices)
-
-            validation_fm_count = sum(
-                1 for profile in before_validation_profiles if top_fm in profile.active_fm_ids()
-            )
-
-            # 4. Generate repair from proposal subset
-            print(
-                f"  [3/6] Generating repair from {len(proposal_traces)} proposal traces "
-                f"(holdout positives: {validation_fm_count})..."
-            )
-            candidate = self.optimizer.generate_repair(
-                top_fm,
-                proposal_profiles,
-                proposal_traces,
-                current_dag,
-            )
-            self.touched_fms.add(top_fm)
-            print(f"    Repair: {candidate.description}")
-
-            # 5. Apply repair and re-run validation split only
-            print(f"  [4/6] Applying repair on holdout validation tasks...")
-            repaired_dag = current_dag
-            for action in candidate.actions:
-                repaired_dag = repaired_dag.apply_repair(action)
-
-            new_traces = self.runner.run_batch(validation_tasks, dag=repaired_dag)
-            for idx, trace in zip(validation_indices, new_traces, strict=False):
-                trace.trace_id = idx
-            new_profiles = self.diagnoser.diagnose_batch(new_traces)
-
-            # 6. Distill on holdout results
-            print(f"  [5/6] Distilling holdout results...")
-            entry = self.distiller.distill_online(
-                top_fm,
-                candidate,
-                before_validation_traces,
-                before_validation_profiles,
-                new_traces,
-                new_profiles,
-            )
-
-            new_fm_count = sum(1 for p in new_profiles if top_fm in p.active_fm_ids())
-            before_pass_rate = _pass_rate(before_validation_traces)
-            after_pass_rate = _pass_rate(new_traces)
-            before_runtime = _mean_metric([trace.latency_s for trace in before_validation_traces])
-            after_runtime = _mean_metric([trace.latency_s for trace in new_traces])
-            print(
-                f"  [6/6] Holdout result: FM-{top_fm} {validation_fm_count} → {new_fm_count}, "
-                f"pass {before_pass_rate:.3f} → {after_pass_rate:.3f}, "
-                f"runtime {before_runtime:.2f}s → {after_runtime:.2f}s ({entry.status})"
-            )
-
-            round_result = {
-                "round": round_i + 1,
-                "target_fm": top_fm,
-                "proposal_size": len(proposal_indices),
-                "validation_size": len(validation_indices),
-                "before_count": validation_fm_count,
-                "after_count": new_fm_count,
-                "before_pass_rate": before_pass_rate,
-                "after_pass_rate": after_pass_rate,
-                "before_runtime_s": before_runtime,
-                "after_runtime_s": after_runtime,
-                "repair_status": entry.status,
-                "repair_description": candidate.description,
-                "validation_metrics": entry.validation_metrics,
-            }
-            results.append(round_result)
-            self.tracker.log(round_result, step=round_i)
-
-            # Update DAG if repair was successful
-            if entry.status == "validated":
-                current_dag = repaired_dag
-                print(f"  Repair applied successfully! Using updated DAG.")
+            # 6. Update DAG if any skill succeeded
+            if best_result and best_result.dag:
+                current_dag = best_result.dag
+                self.evolver.reset_failures(best_result.fm_id)
+                print(f"  Adopting DAG from Skill-{best_result.fm_id}.")
             else:
-                print(f"  Repair failed. Keeping original DAG.")
+                print(f"  No successful repairs this round.")
 
             print()
 
         # Summary
-        if self.touched_fms:
-            from optpilot.modules.wrap_up import WrapUp
-
-            wrap_up = WrapUp(self.library)
-            print(f"=== Wrap-up ===")
-            for fm_id in sorted(self.touched_fms):
-                wrapped = wrap_up.wrap_fm(fm_id, source_mas=current_dag.dag_id or "OptPilot")
-                print(f"  FM-{fm_id}: wrapped {len(wrapped)} canonical skills")
-        self.library.flush()
         summary = {
-            "total_rounds": len(results),
-            "library_stats": self.library.get_stats(),
+            "total_rounds": len(set(r["round"] for r in results)),
             "results": results,
         }
-        self.tracker.save_local("online_optimization.json")
+        self.tracker.save_local("skill_optimization.json")
         return summary
+
+    def _run_skill(
+        self,
+        job: dict,
+        dag: MASDAG,
+        tasks: list[str],
+        traces: list,
+        profiles: list[FMProfile],
+        budget: SkillBudget | None,
+    ) -> tuple[str, SkillResult]:
+        """Run a single skill job."""
+        fm_id = job["fm_id"]
+        proposal_idx = job["proposal_idx"]
+        validation_idx = job["validation_idx"]
+        prior_negatives = job["prior_negatives"]
+
+        # Each skill gets its own DAG copy
+        skill_dag = copy.deepcopy(dag)
+
+        try:
+            skill = get_skill(fm_id)
+        except KeyError:
+            return fm_id, SkillResult(success=False, fm_id=fm_id)
+
+        # Inject prior negatives into the skill run
+        skill_budget = budget or SkillBudget()
+
+        result = skill.run(
+            original_dag=skill_dag,
+            proposal_traces=_take_by_index(traces, proposal_idx),
+            proposal_profiles=_take_by_index(profiles, proposal_idx),
+            proposal_tasks=_take_by_index(tasks, proposal_idx),
+            validation_tasks=_take_by_index(tasks, validation_idx),
+            runner=self.runner,
+            diagnoser=self.diagnoser,
+            budget=SkillBudget(
+                max_llm_calls=skill_budget.max_llm_calls,
+                max_batch_runs=skill_budget.max_batch_runs,
+                max_wall_time_s=skill_budget.max_wall_time_s,
+            ),
+            prior_negatives=prior_negatives,
+        )
+
+        return fm_id, result
+
+    def _run_parallel(
+        self, jobs, dag, tasks, traces, profiles, budget,
+    ) -> list[tuple[str, SkillResult]]:
+        """Run multiple skills in parallel using threads."""
+        results: list[tuple[str, SkillResult]] = []
+
+        with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+            futures = {
+                executor.submit(self._run_skill, job, dag, tasks, traces, profiles, budget): job
+                for job in jobs
+            }
+            for future in as_completed(futures):
+                job = futures[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    fm_id = job["fm_id"]
+                    print(f"  Skill-{fm_id} failed with error: {e}")
+                    results.append((fm_id, SkillResult(success=False, fm_id=fm_id)))
+
+        return results
+
+    def _run_sequential(
+        self, jobs, dag, tasks, traces, profiles, budget,
+    ) -> list[tuple[str, SkillResult]]:
+        """Run skills sequentially."""
+        results: list[tuple[str, SkillResult]] = []
+        for job in jobs:
+            result = self._run_skill(job, dag, tasks, traces, profiles, budget)
+            results.append(result)
+        return results

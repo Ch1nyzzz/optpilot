@@ -10,11 +10,11 @@ def test_repair_library_buffers_writes_until_flush(tmp_path) -> None:
     store_path = tmp_path / "library.json"
     library = RepairLibrary(store_path)
 
-    entry = RepairEntry(fm_id="1.3", fm_name="Step Repetition", source_mas="AG2")
+    entry = RepairEntry(fm_id="B", fm_name="Execution Loop / Stuck", source_mas="AG2")
     library.add(entry)
 
     assert store_path.exists() is False
-    assert library.search("1.3")[0].entry_id == entry.entry_id
+    assert library.search("B")[0].entry_id == entry.entry_id
 
     library.flush()
 
@@ -36,11 +36,11 @@ def test_repair_library_search_excludes_failed_by_default(tmp_path) -> None:
     store_path = tmp_path / "library.json"
     library = RepairLibrary(store_path)
 
-    library.add(RepairEntry(fm_id="1.3", status="failed", success_rate=0.9))
-    validated = RepairEntry(fm_id="1.3", status="validated", success_rate=0.4)
+    library.add(RepairEntry(fm_id="B", status="failed", success_rate=0.9))
+    validated = RepairEntry(fm_id="B", status="validated", success_rate=0.4)
     library.add(validated)
 
-    matches = library.search("1.3")
+    matches = library.search("B")
 
     assert [entry.status for entry in matches] == ["validated"]
     assert matches[0].entry_id == validated.entry_id

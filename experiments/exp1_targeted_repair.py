@@ -80,16 +80,16 @@ def run_baseline_random(
     return {"method": "random", "fm_counts": fm_counts, "n_traces": len(traces), "n_rounds": n_rounds}
 
 
-def run_optpilot_cold(dag: MASDAG, tasks: list[str], n_rounds: int = 3, target_fm: str | None = None) -> dict:
+def run_optpilot_cold(dag: MASDAG, tasks: list[str], n_rounds: int = 3, target_group: str | None = None) -> dict:
     """OptPilot with empty library (cold start)."""
     print("=== OptPilot Cold ===")
     runner = OptPilotRunner(dag=dag)
     orchestrator = Orchestrator(runner=runner, dag=dag)
-    summary = orchestrator.optimize(tasks=tasks, max_rounds=n_rounds, target_fm=target_fm)
+    summary = orchestrator.optimize(tasks=tasks, max_rounds=n_rounds, target_fm=target_group)
     return {"method": "optpilot_cold", **summary}
 
 
-def run_experiment(dag_path: str | None = None, n_tasks: int = 3, n_rounds: int = 3, target_fm: str | None = None):
+def run_experiment(dag_path: str | None = None, n_tasks: int = 3, n_rounds: int = 3, target_group: str | None = None):
     """Run all methods and compare."""
     dag_file = Path(dag_path) if dag_path else DAG_DIR / "chatdev.yaml"
     dag = MASDAG.load(dag_file)
@@ -103,15 +103,15 @@ def run_experiment(dag_path: str | None = None, n_tasks: int = 3, n_rounds: int 
     # 1. Original
     r1 = run_baseline_original(runner, tasks, diagnoser)
     results.append(r1)
-    print(f"  FM counts: {r1['fm_counts']}\n")
+    print(f"  Group counts: {r1['fm_counts']}\n")
 
     # 2. Random
     r2 = run_baseline_random(runner, dag, tasks, diagnoser, n_rounds)
     results.append(r2)
-    print(f"  FM counts: {r2['fm_counts']}\n")
+    print(f"  Group counts: {r2['fm_counts']}\n")
 
     # 3. OptPilot cold
-    r3 = run_optpilot_cold(dag, tasks, n_rounds, target_fm)
+    r3 = run_optpilot_cold(dag, tasks, n_rounds, target_group)
     results.append(r3)
     print()
 
@@ -126,6 +126,6 @@ if __name__ == "__main__":
     parser.add_argument("--dag", default=None, help="Path to MASDAG YAML file")
     parser.add_argument("--tasks", type=int, default=3)
     parser.add_argument("--rounds", type=int, default=3)
-    parser.add_argument("--fm", default=None)
+    parser.add_argument("--group", default=None)
     args = parser.parse_args()
-    run_experiment(args.dag, args.tasks, args.rounds, args.fm)
+    run_experiment(args.dag, args.tasks, args.rounds, args.group)

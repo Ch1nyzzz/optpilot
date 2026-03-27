@@ -1,4 +1,0 @@
-2026-03-26 05:06:31,501 - skydiscover.search.utils.logging_utils - INFO - Logging to outputs/adaevolve/evolve_classifier_0326_0506/logs/adaevolve_20260326_050631.log
-2026-03-26 05:06:31,502 - skydiscover.search.adaevolve.database - INFO - AdaEvolveDatabase initialized: num_islands=2, decay=0.9, intensity=[0.15, 0.5], migration=True (interval=10), unified_archive=True, adaptive_search=True, ucb_selection=True, dynamic_islands=True, paradigm_breakthrough=True, multiobjective=False
-2026-03-26 05:06:31,502 - skydiscover.runner - INFO - Runner ready: search=adaevolve, program=experiments/evolve_classifier/initial_program.py
-2026-03-26 05:06:31,532 - skydiscover.llm - INFO - OpenAI LLM: openai/gpt-oss-120b

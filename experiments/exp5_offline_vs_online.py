@@ -4,7 +4,7 @@ Compares offline Judge predictions against online ground truth
 to quantify the gap between counterfactual evaluation and real execution.
 
 Usage:
-    python -m experiments.exp5_offline_vs_online --fm 1.3
+    python -m experiments.exp5_offline_vs_online --group B
 """
 
 import argparse
@@ -18,15 +18,16 @@ from optpilot.config import LIBRARY_DIR, RESULTS_DIR
 from optpilot.library.repair_library import RepairLibrary
 
 
-def compare_offline_online(fm_id: str = "1.3"):
+def compare_offline_online(group_id: str = "B"):
     """Compare offline predictions with online results."""
+    group_id = group_id.upper()
     offline_lib = RepairLibrary(LIBRARY_DIR / "offline_library.json")
     online_lib = RepairLibrary(LIBRARY_DIR / "online_library.json")
 
-    offline_entries = [e for e in offline_lib.entries if e.fm_id == fm_id]
-    online_entries = [e for e in online_lib.entries if e.fm_id == fm_id]
+    offline_entries = [e for e in offline_lib.entries if e.fm_id == group_id]
+    online_entries = [e for e in online_lib.entries if e.fm_id == group_id]
 
-    print(f"=== Exp 5: Offline vs Online for FM-{fm_id} ===")
+    print(f"=== Exp 5: Offline vs Online for Group-{group_id} ===")
     print(f"Offline entries: {len(offline_entries)}")
     print(f"Online entries: {len(online_entries)}")
 
@@ -54,19 +55,19 @@ def compare_offline_online(fm_id: str = "1.3"):
     print(f"  Online validation rate: {online_validated/max(len(online_entries),1)*100:.1f}%")
 
     results = {
-        "fm_id": fm_id,
+        "fm_id": group_id,
         "offline_total": len(offline_entries),
         "offline_positive": offline_positive,
         "online_total": len(online_entries),
         "online_validated": online_validated,
     }
-    out_path = RESULTS_DIR / f"exp5_offline_vs_online_fm{fm_id}.json"
+    out_path = RESULTS_DIR / f"exp5_offline_vs_online_group_{group_id.lower()}.json"
     out_path.write_text(json.dumps(results, indent=2))
     print(f"\nResults saved to {out_path}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fm", default="1.3")
+    parser.add_argument("--group", default="B")
     args = parser.parse_args()
-    compare_offline_online(args.fm)
+    compare_offline_online(args.group)

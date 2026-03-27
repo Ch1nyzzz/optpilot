@@ -6,14 +6,14 @@ and outputs a modified YAML based on diagnosis results.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import yaml
 
-from optpilot.data.fm_taxonomy import FM_DEFINITIONS
+from optpilot.data.fm_taxonomy_6group import GROUP_DEFINITIONS as FM_DEFINITIONS
 from optpilot.llm import acall_llm, call_llm
 from optpilot.models import FMProfile, MASTrace
+from optpilot.repair_utils import extract_fenced_block, extract_preface
 
 
 OPTIMIZE_PROMPT = """\
@@ -73,26 +73,6 @@ def _build_diagnosis_text(profile: FMProfile) -> str:
     return "\n".join(lines) if lines else "No active FMs diagnosed."
 
 
-def _extract_yaml(response: str) -> str:
-    """Extract ```yaml ... ``` block from LLM response."""
-    match = re.search(r'```yaml\s*\n(.*?)```', response, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    # Fallback: find the last yaml block
-    matches = list(re.finditer(r'```yaml\s*\n(.*?)```', response, re.DOTALL))
-    if matches:
-        return matches[-1].group(1).strip()
-    raise ValueError("LLM response does not contain a ```yaml``` block")
-
-
-def _extract_analysis(response: str) -> str:
-    """Extract analysis text before the YAML block."""
-    match = re.search(r'```yaml', response)
-    if match:
-        return response[:match.start()].strip()
-    return response[:500].strip()
-
-
 class YAMLOptimizer:
     """YAML-level MAS optimizer."""
 
@@ -146,8 +126,8 @@ class YAMLOptimizer:
         )
 
         # Parse response
-        analysis = _extract_analysis(response)
-        modified_yaml = _extract_yaml(response)
+        analysis = extract_preface(response, "yaml")
+        modified_yaml = extract_fenced_block(response, "yaml")
 
         # Validate YAML
         yaml_valid = False
@@ -198,8 +178,8 @@ class YAMLOptimizer:
             max_tokens=16384,
         )
 
-        analysis = _extract_analysis(response)
-        modified_yaml = _extract_yaml(response)
+        analysis = extract_preface(response, "yaml")
+        modified_yaml = extract_fenced_block(response, "yaml")
 
         yaml_valid = False
         try:
