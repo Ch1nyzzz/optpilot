@@ -16,7 +16,7 @@ Core thesis: **diagnosis-driven targeted repair, not blind evolution**. Competit
 - **Runner** (`modules/runner.py`): executes MASDAG via built-in DAGExecutor, collects traces with ground-truth scoring
 - **Diagnoser** (`modules/diagnoser.py`): 6-group FM classification (MiniMax M2.5) + agent/step localization
 - **Skill Workflows** (`skills/`): 6 Python classes (A-F), each a complete repair agent: analyze → evolve (inner loop, YAML-level) → validate → reflect (outer loop)
-- **SkillEvolver** (`skills/evolution.py`): when a Skill fails ≥3 times, LLM modifies Skill's own Python source
+- **SkillEvolver** (`skills/evolution.py`): when a Skill hits the meta-evolution failure threshold (default 3, configurable), the LLM modifies the Skill's own Python source
 
 MAS-as-DAG abstraction: any MAS = MASDAG(Nodes, Edges).
 - Node types: agent (LLM call), literal (fixed text), loop_counter (iteration control), passthrough

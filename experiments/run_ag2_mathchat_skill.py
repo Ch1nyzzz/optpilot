@@ -1,31 +1,18 @@
 """AG2 MathChat × Official Benchmarks — Skill Workflow Optimization.
 
-┌─────────────────────────────────────────────────────────────────────┐
-│  Framework:   AG2 MathChat (3-agent GroupChat)                      │
-│               Agent_Problem_Solver + Agent_Code_Executor            │
-│               + Agent_Verifier                                      │
-│  DAG:         dags/ag2_mathchat.yaml                                │
-│  Model:       MiniMax M2.5 (via Together AI)                        │
-│  Taxonomy:    6-group FM (A-F), merged from 14 MAST failure modes   │
-│  Benchmarks:  MMLU · AIME 2025 · OlympiadBench                     │
-│  Pipeline:    Skill Workflows (analyze → evolve → validate →        │
-│               reflect), one per FM group, parallel execution        │
-└─────────────────────────────────────────────────────────────────────┘
+Optimizes on train set, evaluates final DAG on held-out test set.
 
 Usage:
-    # Official benchmarks (MMLU + AIME + OlympiadBench, auto-scored)
-    python -m experiments.run_ag2_mathchat_skill --tasks 9 --rounds 3
-
-    # Target a specific FM group
-    python -m experiments.run_ag2_mathchat_skill --tasks 9 --rounds 5 --group B
-
-    # Sequential execution (for debugging)
-    python -m experiments.run_ag2_mathchat_skill --tasks 6 --rounds 2 --no-parallel
+    python -m experiments.run_ag2_mathchat_skill --model openai/gpt-oss-120b
+    python -m experiments.run_ag2_mathchat_skill --model openai/gpt-oss-120b --group E
 """
 
 import argparse
+import asyncio
 import json
 import sys
+import time
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -33,138 +20,285 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from optpilot.config import DAG_DIR, RESULTS_DIR
 from optpilot.dag.core import MASDAG
-from optpilot.data.benchmarks import load_online_benchmark_suite
+from optpilot.data.benchmarks import load_online_benchmark_suite, OfficialBenchmarkSuite
 from optpilot.models import SkillBudget
 from optpilot.modules.runner import OptPilotRunner
 from optpilot.orchestrator import Orchestrator
 
 import optpilot.skills  # noqa: F401  — trigger @register_skill for A-F
 
-# ── Experiment configuration ──────────────────────────────────────────
-
-DAG_FILE = "ag2_mathchat.yaml"          # 3-agent GroupChat from MAST Appendix L
-RESULT_PREFIX = "ag2_mathchat_skill"    # result filename prefix
+DAG_FILE = "ag2_mathchat.yaml"
+RESULT_PREFIX = "ag2_mathchat_skill"
 
 
-def run(
+def _split_suite(suite: OfficialBenchmarkSuite, n_train: int) -> tuple[list, list]:
+    """Split examples into train/test proportionally per benchmark."""
+    by_bench: dict[str, list] = defaultdict(list)
+    for ex in suite.examples:
+        by_bench[ex.benchmark_name].append(ex)
+
+    total = len(suite.examples)
+    train_examples, test_examples = [], []
+    for bname, examples in sorted(by_bench.items()):
+        bench_train = round(len(examples) * n_train / total)
+        bench_train = min(bench_train, len(examples))
+        train_examples.extend(examples[:bench_train])
+        test_examples.extend(examples[bench_train:])
+    return train_examples, test_examples
+
+
+async def _eval_on_test(
+    runner: OptPilotRunner,
+    dag: MASDAG,
+    test_suite: OfficialBenchmarkSuite,
+    concurrency: int,
+    label: str,
+    output_base: str | Path | None = None,
+):
+    """Evaluate a DAG on the test set and print per-benchmark results."""
+    tasks = test_suite.tasks()
+    print(f"\n--- {label}: evaluating on {len(tasks)} test tasks ---")
+    t0 = time.time()
+    traces = await runner.arun_batch(
+        tasks,
+        dag=dag,
+        output_base=output_base,
+        max_concurrency=concurrency,
+    )
+    elapsed = time.time() - t0
+
+    per_bench: dict[str, list[float]] = defaultdict(list)
+    details = []
+    for trace in traces:
+        per_bench[trace.benchmark_name].append(trace.task_score)
+        details.append({
+            "benchmark": trace.benchmark_name,
+            "score": trace.task_score,
+            "success": trace.task_success,
+            "latency_s": trace.latency_s,
+            "task_key": trace.task_key,
+            "trace_path": trace.trace_path,
+        })
+
+    all_scores = [t.task_score for t in traces]
+    overall_acc = sum(all_scores) / len(all_scores) if all_scores else 0.0
+
+    print(f"  {label} Test Results:")
+    for bname, scores in sorted(per_bench.items()):
+        acc = sum(scores) / len(scores) if scores else 0.0
+        correct = sum(1 for s in scores if s > 0)
+        print(f"    {bname:20s}  {correct}/{len(scores)}  acc={acc:.3f}")
+    total_correct = sum(1 for s in all_scores if s > 0)
+    print(f"    {'OVERALL':20s}  {total_correct}/{len(all_scores)}  acc={overall_acc:.3f}")
+    print(f"    Elapsed: {elapsed:.1f}s")
+
+    return {
+        "overall_accuracy": overall_acc,
+        "elapsed_s": elapsed,
+        "per_benchmark": {
+            bname: {
+                "n": len(scores),
+                "correct": sum(1 for s in scores if s > 0),
+                "accuracy": sum(scores) / len(scores) if scores else 0.0,
+            }
+            for bname, scores in sorted(per_bench.items())
+        },
+        "details": details,
+    }
+
+
+async def run(
     dag_path: str | None = None,
-    n_tasks: int = 9,
+    n_train: int = 100,
+    n_test: int = 100,
     max_rounds: int = 5,
     target_group: str | None = None,
     use_wandb: bool = False,
-    parallel: bool = True,
+    model: str = "openai/gpt-oss-120b",
+    concurrency: int = 512,
+    timeout: int = 600,
+    reuse_traces_dir: str | None = None,
+    clear_negatives: bool = False,
 ):
-    """Run AG2 MathChat optimization with Skill Workflows on official benchmarks.
+    total = n_train + n_test
+    model_short = model.split("/")[-1]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    group_tag = f"_group{target_group}" if target_group else ""
+    result_stem = f"{RESULT_PREFIX}_{model_short}{group_tag}_{timestamp}"
+    artifact_dir = RESULTS_DIR / f"{result_stem}_artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    dag_versions_dir = artifact_dir / "dag_versions"
+    dag_versions_dir.mkdir(parents=True, exist_ok=True)
 
-    Benchmark composition (deterministic 3-way split):
-      - MMLU:          multi-choice knowledge questions
-      - AIME 2025:     competition math (integer answers)
-      - OlympiadBench: open-ended math (numerical / expression)
+    # Load and split benchmarks
+    print("Loading benchmarks...")
+    full_suite = load_online_benchmark_suite(total)
+    train_examples, test_examples = _split_suite(full_suite, n_train)
+    train_suite = OfficialBenchmarkSuite(train_examples)
+    test_suite = OfficialBenchmarkSuite(test_examples)
 
-    Each benchmark has a ground-truth scorer so `pass_rate` is real accuracy,
-    not a proxy.
-    """
-    # ── Load benchmarks ──
-    suite = load_online_benchmark_suite(n_tasks)
-    tasks = suite.tasks()
-
-    # ── Load DAG ──
     dag_file = Path(dag_path) if dag_path else DAG_DIR / DAG_FILE
     dag = MASDAG.load(dag_file)
+    dag.save(dag_versions_dir / "input.yaml")
 
-    # ── Build runner with benchmark scorer ──
-    runner = OptPilotRunner(
+    # Runner scored against train suite (for optimization)
+    train_runner = OptPilotRunner(
         dag=dag,
+        model=model,
         benchmark_name="AG2_MathChat",
-        score_fn=suite.score_task,
-        benchmark_name_resolver=suite.benchmark_name_for_task,
+        score_fn=train_suite.score_task,
+        benchmark_name_resolver=train_suite.benchmark_name_for_task,
+        timeout=timeout,
     )
 
-    # ── Build orchestrator ──
+    # Separate runner scored against test suite (for evaluation)
+    test_runner = OptPilotRunner(
+        dag=dag,
+        model=model,
+        benchmark_name="AG2_MathChat",
+        score_fn=test_suite.score_task,
+        benchmark_name_resolver=test_suite.benchmark_name_for_task,
+        timeout=timeout,
+    )
+
     orchestrator = Orchestrator(
-        runner=runner,
+        runner=train_runner,
         dag=dag,
         use_wandb=use_wandb,
-        parallel=parallel,
     )
+    if clear_negatives:
+        removed = orchestrator.negatives_store.clear_all()
+        print(f"Cleared {removed} persisted negatives before optimization.")
 
-    # ── Print experiment config ──
-    bench_counts = suite.benchmark_counts()
     print("=" * 65)
-    print("  AG2 MathChat × Official Benchmarks — Skill Workflow")
+    print("  AG2 MathChat — Skill Workflow Optimization")
     print("=" * 65)
-    print(f"  DAG:        {dag.dag_id}  ({dag_file.name})")
-    print(f"  Agents:     {', '.join(dag.agent_nodes.keys())}")
-    print(f"  Tasks:      {n_tasks} total")
-    for bname, bcount in bench_counts.items():
-        print(f"              · {bname}: {bcount}")
-    print(f"  Rounds:     {max_rounds}")
-    print(f"  Parallel:   {parallel}")
-    print(f"  Taxonomy:   6-group (A-F)")
+    print(f"  Model:       {model}")
+    print(f"  DAG:         {dag.dag_id}  ({dag_file.name})")
+    print(f"  Agents:      {', '.join(dag.agent_nodes.keys())}")
+    print(f"  Concurrency: {concurrency}")
+    print(f"  Timeout:     {timeout}s/task")
+    print(f"  Train:       {len(train_examples)} tasks  {dict(train_suite.benchmark_counts())}")
+    print(f"  Test:        {len(test_examples)} tasks  {dict(test_suite.benchmark_counts())}")
+    print(f"  Rounds:      {max_rounds}")
     if target_group:
-        print(f"  Target FM:  Group-{target_group}")
+        print(f"  Target FM:   Group-{target_group}")
     print("=" * 65)
     print()
 
-    # ── Run optimization ──
-    summary = orchestrator.optimize(
-        tasks=tasks,
-        max_rounds=max_rounds,
-        target_fm=target_group,
-        budget=SkillBudget(max_batch_runs=10, max_wall_time_s=600),
+    # Run optimization on train set
+    train_tasks = train_suite.tasks()
+    if reuse_traces_dir:
+        summary = await orchestrator.aoptimize_from_traces(
+            tasks=train_tasks,
+            trace_base=reuse_traces_dir,
+            target_fm=target_group,
+            budget=SkillBudget(max_llm_calls=100, max_batch_runs=100, max_wall_time_s=3600),
+            concurrency=concurrency,
+            trace_output_base=artifact_dir / "optimization",
+            dag_output_base=dag_versions_dir / "optimization",
+        )
+    else:
+        summary = await orchestrator.aoptimize(
+            tasks=train_tasks,
+            max_rounds=max_rounds,
+            target_fm=target_group,
+            budget=SkillBudget(max_llm_calls=100, max_batch_runs=100, max_wall_time_s=3600),
+            concurrency=concurrency,
+            trace_output_base=artifact_dir / "optimization",
+            dag_output_base=dag_versions_dir / "optimization",
+        )
+
+    # Evaluate final DAG on held-out test set
+    final_dag = orchestrator.dag  # updated by aoptimize if any repair succeeded
+    final_dag.save(dag_versions_dir / "optimized_final.yaml")
+    test_stats = await _eval_on_test(
+        test_runner,
+        final_dag,
+        test_suite,
+        concurrency,
+        "FINAL",
+        output_base=artifact_dir / "test_final",
     )
 
-    # ── Save results ──
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    group_tag = f"_group{target_group}" if target_group else ""
-    result_path = RESULTS_DIR / f"{RESULT_PREFIX}{group_tag}_{timestamp}.json"
+    # Also evaluate original DAG on test for comparison
+    original_dag = MASDAG.load(dag_file)
+    original_dag.save(dag_versions_dir / "baseline_reference.yaml")
+    baseline_test_stats = await _eval_on_test(
+        test_runner,
+        original_dag,
+        test_suite,
+        concurrency,
+        "BASELINE",
+        output_base=artifact_dir / "test_baseline",
+    )
+
+    # Save results
+    result_path = RESULTS_DIR / f"{result_stem}.json"
 
     output = {
         "experiment": "ag2_mathchat_skill_workflow",
+        "model": model,
         "dag": dag.dag_id,
-        "dag_file": str(dag_file),
-        "benchmarks": bench_counts,
-        "n_tasks": n_tasks,
+        "artifacts_dir": str(artifact_dir),
+        "dag_versions_dir": str(dag_versions_dir),
+        "n_train": n_train,
+        "n_test": n_test,
         "max_rounds": max_rounds,
         "target_group": target_group,
-        "parallel": parallel,
-        **summary,
+        "concurrency": concurrency,
+        "timeout_s": timeout,
+        "reuse_traces_dir": reuse_traces_dir,
+        "clear_negatives": clear_negatives,
+        "optimization": summary,
+        "test_baseline": baseline_test_stats,
+        "test_final": test_stats,
     }
     with open(result_path, "w") as f:
         json.dump(output, f, indent=2, ensure_ascii=False, default=str)
     print(f"\nResults saved to {result_path}")
 
-    # ── Print summary ──
+    # Print summary
     print(f"\n{'=' * 65}")
-    print(f"  Summary — {summary['total_rounds']} round(s)")
+    print(f"  Summary — {summary['total_rounds']} optimization round(s)")
     print(f"{'=' * 65}")
     for r in summary["results"]:
-        status = "✓ REPAIRED" if r["success"] else "✗ FAILED"
+        status = "REPAIRED" if r["success"] else "FAILED"
         print(
             f"  Group-{r['fm_id']} ({r['fm_name']}): {status}  "
-            f"fm={r['final_fm_rate']:.2f}  pass={r['final_pass_rate']:.3f}  "
-            f"iters={r['inner_iterations']}  rounds={r['outer_rounds']}"
+            f"fm={r['final_fm_rate']:.2f}  pass={r['final_pass_rate']:.3f}"
         )
-    print()
+    print(f"\n  Test accuracy: {baseline_test_stats['overall_accuracy']:.3f} → {test_stats['overall_accuracy']:.3f}")
+    print(f"{'=' * 65}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="AG2 MathChat Skill Workflow on MMLU / AIME / OlympiadBench",
+        description="AG2 MathChat Skill Workflow on AIME2024/2025 / OlympiadBench / MMLU",
     )
-    parser.add_argument("--dag", default=None, help="Path to MASDAG YAML (default: ag2_mathchat.yaml)")
-    parser.add_argument("--tasks", type=int, default=9, help="Total tasks (split across 3 benchmarks)")
-    parser.add_argument("--rounds", type=int, default=5, help="Max optimization rounds")
+    parser.add_argument("--dag", default=None, help="Path to MASDAG YAML")
+    parser.add_argument("--train", type=int, default=100, help="Train set size")
+    parser.add_argument("--test", type=int, default=100, help="Test set size")
+    parser.add_argument("--rounds", type=int, default=1, help="Max optimization rounds (default 1, skills handle convergence internally)")
     parser.add_argument("--group", default=None, help="Target a specific FM group (A-F)")
+    parser.add_argument("--model", default="openai/gpt-oss-120b", help="Model ID on Together AI")
+    parser.add_argument("--concurrency", type=int, default=512, help="Max concurrent tasks")
+    parser.add_argument("--timeout", type=int, default=600, help="Timeout per task in seconds")
+    parser.add_argument("--reuse-traces-dir", default=None, help="Reuse persisted train traces instead of rerunning train")
+    parser.add_argument("--clear-negatives", action="store_true", help="Delete persisted negatives before optimization")
     parser.add_argument("--wandb", action="store_true", help="Enable W&B tracking")
-    parser.add_argument("--no-parallel", action="store_true", help="Run skills sequentially")
     args = parser.parse_args()
 
-    run(
+    asyncio.run(run(
         dag_path=args.dag,
-        n_tasks=args.tasks,
+        n_train=args.train,
+        n_test=args.test,
         max_rounds=args.rounds,
         target_group=args.group,
         use_wandb=args.wandb,
-        parallel=not args.no_parallel,
-    )
+        model=args.model,
+        concurrency=args.concurrency,
+        timeout=args.timeout,
+        reuse_traces_dir=args.reuse_traces_dir,
+        clear_negatives=args.clear_negatives,
+    ))

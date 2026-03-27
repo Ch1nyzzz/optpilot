@@ -88,16 +88,26 @@ Given an MAS execution trace with a known failure group:
 - Definition: {group_description}
 - Typical repair strategy: {repair_strategy}
 
+## How the DAG executor works
+- The MAS is defined as a YAML DAG with nodes (agents, literals, passthrough, loop_counter) and edges.
+- Each edge has: trigger (activates the target node), carry_data (passes output to target's input), condition (keyword matching).
+- **In loops**: when Agent_Verifier triggers Agent_Code_Executor, the Code_Executor ONLY receives the Verifier's output via carry_data. It does NOT automatically receive the original USER input again.
+- If an agent says "I need the problem statement" or produces empty/confused output, it usually means the edge feeding it did not carry the necessary context.
+- Loop counters track iterations; when max_iterations is reached, the exit edge fires.
+
 ## Trace
 {trace_content}
 
-Analyze the trace to localize the fault. Respond with ONLY a JSON object:
+Analyze the trace to localize the fault. Consider both agent-level AND DAG-structure-level causes.
+
+Respond with ONLY a JSON object:
 
 {{
-    "agent": "<name of the faulty agent>",
+    "agent": "<name of the faulty agent, or 'DAG_structure' if the fault is in edges/routing>",
     "step": "<phase or step where the fault occurs>",
     "context": "<key context around the fault, max 2 sentences>",
-    "root_cause": "<root cause analysis, max 2 sentences>"
+    "root_cause": "<root cause analysis — specify if the issue is in an agent prompt, edge carry_data, loop config, or missing edges, max 3 sentences>",
+    "dag_component": "<'agent_prompt' | 'edge_carry_data' | 'edge_condition' | 'edge_missing' | 'loop_config' | 'node_config' | 'other'>"
 }}"""
 
 
@@ -281,6 +291,7 @@ class Diagnoser:
                 step=result.get("step", "unknown"),
                 context=result.get("context", ""),
                 root_cause=result.get("root_cause", ""),
+                dag_component=result.get("dag_component", "other"),
             )
         except Exception as e:
             print(f"  Warning: localize Group-{group_id} failed for trace {trace.trace_id}: {e}")
@@ -302,6 +313,7 @@ class Diagnoser:
                 step=result.get("step", "unknown"),
                 context=result.get("context", ""),
                 root_cause=result.get("root_cause", ""),
+                dag_component=result.get("dag_component", "other"),
             )
         except Exception as e:
             print(f"  Warning: async localize Group-{group_id} failed for trace {trace.trace_id}: {e}")

@@ -1,0 +1,30 @@
+{
+  "n_traces": 100,
+  "fm_ranking": [
+    {
+      "fm_id": "B",
+      "count": 73
+    },
+    {
+      "fm_id": "F",
+      "count": 41
+    },
+    {
+      "fm_id": "D",
+      "count": 34
+    },
+    {
+      "fm_id": "C",
+      "count": 26
+    },
+    {
+      "fm_id": "E",
+      "count": 15
+    },
+    {
+      "fm_id": "A",
+      "count": 6
+    }
+  ],
+  "source_trace_base": "/data/home/yuhan/optpilot/results/ag2_mathchat_skill_gpt-oss-120b_20260327_050837_artifacts/optimization/round_1/train"
+}

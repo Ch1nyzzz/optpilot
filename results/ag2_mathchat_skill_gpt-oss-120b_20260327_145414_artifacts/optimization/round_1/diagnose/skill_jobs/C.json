@@ -1,0 +1,849 @@
+{
+  "fm_id": "C",
+  "proposal_idx": [
+    5,
+    7,
+    11,
+    18,
+    21
+  ],
+  "validation_idx": [
+    22,
+    24,
+    33,
+    39,
+    41
+  ],
+  "proposal_traces": [
+    {
+      "task_index": 5,
+      "trace_id": 5,
+      "mas_name": "AG2_MathChat",
+      "llm_name": "openai/gpt-oss-120b",
+      "benchmark_name": "AIME2024",
+      "trace_path": "/data/home/yuhan/optpilot/results/ag2_mathchat_skill_gpt-oss-120b_20260327_050837_artifacts/optimization/round_1/train/task_5/trace.txt",
+      "task_key": "Consider the paths of length $16$ that follow the ",
+      "task_success": null,
+      "task_score": null,
+      "latency_s": null,
+      "active_fm_ids": [
+        "B",
+        "C",
+        "D"
+      ],
+      "labels": {
+        "A": {
+          "fm_name": "Instruction Non-Compliance",
+          "category": "A",
+          "present": false,
+          "confidence": 1.0
+        },
+        "B": {
+          "fm_name": "Execution Loop / Stuck",
+          "category": "B",
+          "present": true,
+          "confidence": 1.0
+        },
+        "C": {
+          "fm_name": "Context Loss",
+          "category": "C",
+          "present": true,
+          "confidence": 1.0
+        },
+        "D": {
+          "fm_name": "Communication Failure",
+          "category": "D",
+          "present": true,
+          "confidence": 1.0
+        },
+        "E": {
+          "fm_name": "Task Drift / Reasoning Error",
+          "category": "E",
+          "present": false,
+          "confidence": 1.0
+        },
+        "F": {
+          "fm_name": "Verification Failure",
+          "category": "F",
+          "present": false,
+          "confidence": 1.0
+        }
+      },
+      "localization": {
+        "B": {
+          "agent": "Agent_Code_Executor",
+          "step": "Loop execution (iterations 80-90)",
+          "context": "Agent_Code_Executor repeatedly outputs that it needs the problem statement, yet receives only routing messages like 'SUGGESTED NEXT SPEAKER: Agent Code Executor' as input, never the actual problem.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor does not carry the original problem statement via carry_data. Instead, it only passes routing suggestions, causing Code Executor to repeatedly claim it has no problem to solve, creating an infinite loop.",
+          "dag_component": "edge_carry_data"
+        },
+        "C": {
+          "agent": "DAG_structure",
+          "step": "Loop execution between Agent_Verifier and Agent_Code_Executor (iter 1-90)",
+          "context": "Agent_Problem_Solver provided complete mathematical solution in iter 1, but Agent_Code_Executor repeatedly receives only 'SUGGESTED NEXT SPEAKER' messages instead of the actual problem statement. The Code Executor asks for problem details but never receives them.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor does not carry the original USER input or the problem solution from Agent_Problem_Solver. According to DAG rules, in loops the target only receives the triggerer's output via carry_data - but Verifier outputs only routing suggestions, not the problem context.",
+          "dag_component": "edge_carry_data"
+        },
+        "D": {
+          "agent": "DAG_structure",
+          "step": "After Agent_Problem_Solver completes solution (iter 1)",
+          "context": "Agent_Problem_Solver provides a complete solution (147 + 147 = 294 paths), but Agent_Verifier (iter 1) receives only the original problem statement again, not the solution. Agent_Code_Executor repeatedly claims it needs the problem statement despite it being provided at start.",
+          "root_cause": "The edge from Agent_Problem_Solver to subsequent agents (Verifier/Code_Executor) does not carry the solution output via carry_data. Instead, subsequent agents only receive the original USER input, causing Agent_Code_Executor to claim missing context and Agent_Verifier to loop without verifying the solution.",
+          "dag_component": "edge_carry_data"
+        }
+      }
+    },
+    {
+      "task_index": 7,
+      "trace_id": 7,
+      "mas_name": "AG2_MathChat",
+      "llm_name": "openai/gpt-oss-120b",
+      "benchmark_name": "AIME2024",
+      "trace_path": "/data/home/yuhan/optpilot/results/ag2_mathchat_skill_gpt-oss-120b_20260327_050837_artifacts/optimization/round_1/train/task_7/trace.txt",
+      "task_key": "Eight circles of radius $34$ are sequentially tang",
+      "task_success": null,
+      "task_score": null,
+      "latency_s": null,
+      "active_fm_ids": [
+        "B",
+        "C",
+        "D",
+        "F"
+      ],
+      "labels": {
+        "A": {
+          "fm_name": "Instruction Non-Compliance",
+          "category": "A",
+          "present": false,
+          "confidence": 1.0
+        },
+        "B": {
+          "fm_name": "Execution Loop / Stuck",
+          "category": "B",
+          "present": true,
+          "confidence": 1.0
+        },
+        "C": {
+          "fm_name": "Context Loss",
+          "category": "C",
+          "present": true,
+          "confidence": 1.0
+        },
+        "D": {
+          "fm_name": "Communication Failure",
+          "category": "D",
+          "present": true,
+          "confidence": 1.0
+        },
+        "E": {
+          "fm_name": "Task Drift / Reasoning Error",
+          "category": "E",
+          "present": false,
+          "confidence": 1.0
+        },
+        "F": {
+          "fm_name": "Verification Failure",
+          "category": "F",
+          "present": true,
+          "confidence": 1.0
+        }
+      },
+      "localization": {
+        "B": {
+          "agent": "DAG_structure",
+          "step": "Loop termination and inter-agent context passing",
+          "context": "After iter 1, agents only receive 'SUGGESTED NEXT SPEAKER' messages without the original problem statement or partial solution. Agent_Code_Executor repeatedly asks for the problem despite it being provided at start.",
+          "root_cause": "The edge carry_data is misconfigured - routing edges only pass 'SUGGESTED NEXT SPEAKER' text instead of carrying the problem statement and solution context. Additionally, the loop counter reaches 5/5 but doesn't actually terminate execution; the system continues cycling indefinitely.",
+          "dag_component": "edge_carry_data"
+        },
+        "C": {
+          "agent": "DAG_structure",
+          "step": "After loop counter exhaustion (iter 5)",
+          "context": "Agent_Code_Executor (iter 80) responds with 'I need the problem statement' - all context from the original USER input has been lost. The agents enter a loop of passing 'SUGGESTED NEXT SPEAKER' messages without the actual problem.",
+          "root_cause": "The edge carrying USER input to agents only fires once initially. When the loop counter exhausts at 5/5 and restarts, there is no carry_data mechanism to restore the original problem statement to the agents. The DAG lacks context preservation across loop iterations.",
+          "dag_component": "edge_carry_data"
+        },
+        "D": {
+          "agent": "DAG_structure",
+          "step": "Loop iterations (iter 80-90)",
+          "context": "Agent_Code_Executor repeatedly requests the problem statement but only receives 'SUGGESTED NEXT SPEAKER: Agent Code Executor' as input, never the actual problem.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor is missing proper carry_data configuration - it passes only routing suggestions instead of the original problem statement or Agent_Problem_Solver's solution.",
+          "dag_component": "edge_carry_data"
+        },
+        "F": {
+          "agent": "DAG_structure",
+          "step": "Loop execution after Agent_Problem_Solver (iter 1)",
+          "context": "Agent_Code_Executor repeatedly asks for the problem statement despite the original problem being provided at the start, indicating it never receives the context.",
+          "root_cause": "The edge from Agent_Problem_Solver to Agent_Code_Executor does not carry the necessary problem context via carry_data. When Agent_Verifier triggers Code_Executor in the loop, it only passes its own output (suggesting next speaker) rather than the original problem statement or the partial solution.",
+          "dag_component": "edge_carry_data"
+        }
+      }
+    },
+    {
+      "task_index": 11,
+      "trace_id": 11,
+      "mas_name": "AG2_MathChat",
+      "llm_name": "openai/gpt-oss-120b",
+      "benchmark_name": "AIME2024",
+      "trace_path": "/data/home/yuhan/optpilot/results/ag2_mathchat_skill_gpt-oss-120b_20260327_050837_artifacts/optimization/round_1/train/task_11/trace.txt",
+      "task_key": "Define $f(x)=|| x|-\\tfrac{1}{2}|$ and $g(x)=|| x|-",
+      "task_success": null,
+      "task_score": null,
+      "latency_s": null,
+      "active_fm_ids": [
+        "B",
+        "C"
+      ],
+      "labels": {
+        "A": {
+          "fm_name": "Instruction Non-Compliance",
+          "category": "A",
+          "present": false,
+          "confidence": 1.0
+        },
+        "B": {
+          "fm_name": "Execution Loop / Stuck",
+          "category": "B",
+          "present": true,
+          "confidence": 1.0
+        },
+        "C": {
+          "fm_name": "Context Loss",
+          "category": "C",
+          "present": true,
+          "confidence": 1.0
+        },
+        "D": {
+          "fm_name": "Communication Failure",
+          "category": "D",
+          "present": false,
+          "confidence": 1.0
+        },
+        "E": {
+          "fm_name": "Task Drift / Reasoning Error",
+          "category": "E",
+          "present": false,
+          "confidence": 1.0
+        },
+        "F": {
+          "fm_name": "Verification Failure",
+          "category": "F",
+          "present": false,
+          "confidence": 1.0
+        }
+      },
+      "localization": {
+        "B": {
+          "agent": "DAG_structure",
+          "step": "Loop iterations 82-90",
+          "context": "Agents repeatedly ask for problem statement they should already have. Agent_Verifier and Agent_Code_Executor exchange 'SUGGESTED NEXT SPEAKER' messages without the original math problem being passed.",
+          "root_cause": "The loop edge from Agent_Verifier to Agent_Code_Executor does not carry the original USER input (the math problem). When entering the loop, only the Verifier's output is passed via carry_data, losing the problem context. Additionally, the loop counter shows 'loop exhausted (5/5)' but execution continues beyond the limit, indicating loop termination logic is not properly enforced.",
+          "dag_component": "edge_carry_data"
+        },
+        "C": {
+          "agent": "DAG_structure",
+          "step": "iter 82 (loop iterations 2-5)",
+          "context": "At iter 82, both Agent_Verifier and Agent_Code_Executor output messages asking for the problem statement: 'I need to know what problem you'd like me to solve' and 'once the problem statement is provided'. This indicates they have lost the original USER input.",
+          "root_cause": "The loop edge from Agent_Verifier to Agent_Code_Executor only carries the Verifier's output (SUGGESTED NEXT SPEAKER: Agent Problem Solver), not the original USER input. After the first iteration, subsequent loop iterations feed only the previous agent's output, causing complete context loss of the task description.",
+          "dag_component": "edge_carry_data"
+        }
+      }
+    },
+    {
+      "task_index": 18,
+      "trace_id": 18,
+      "mas_name": "AG2_MathChat",
+      "llm_name": "openai/gpt-oss-120b",
+      "benchmark_name": "AIME2025",
+      "trace_path": "/data/home/yuhan/optpilot/results/ag2_mathchat_skill_gpt-oss-120b_20260327_050837_artifacts/optimization/round_1/train/task_18/trace.txt",
+      "task_key": "Find the sum of all positive integers $ n $ such t",
+      "task_success": null,
+      "task_score": null,
+      "latency_s": null,
+      "active_fm_ids": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F"
+      ],
+      "labels": {
+        "A": {
+          "fm_name": "Instruction Non-Compliance",
+          "category": "A",
+          "present": true,
+          "confidence": 1.0
+        },
+        "B": {
+          "fm_name": "Execution Loop / Stuck",
+          "category": "B",
+          "present": true,
+          "confidence": 1.0
+        },
+        "C": {
+          "fm_name": "Context Loss",
+          "category": "C",
+          "present": true,
+          "confidence": 1.0
+        },
+        "D": {
+          "fm_name": "Communication Failure",
+          "category": "D",
+          "present": true,
+          "confidence": 1.0
+        },
+        "E": {
+          "fm_name": "Task Drift / Reasoning Error",
+          "category": "E",
+          "present": true,
+          "confidence": 1.0
+        },
+        "F": {
+          "fm_name": "Verification Failure",
+          "category": "F",
+          "present": true,
+          "confidence": 1.0
+        }
+      },
+      "localization": {
+        "A": {
+          "agent": "DAG_structure",
+          "step": "Edge from Agent_Verifier to Agent_Code_Executor (iter 1)",
+          "context": "Agent_Problem_Solver correctly solves the problem (n=1,11,37, sum=49), but Agent_Code_Executor receives only the original problem statement and the Verifier's routing message, not the computed solution.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor does not carry the solution output from Agent_Problem_Solver. According to DAG rules, Code_Executor only receives Verifier's output via carry_data, which contains only routing metadata ('SUGGESTED NEXT SPEAKER') but not the mathematical solution needed for verification.",
+          "dag_component": "edge_carry_data"
+        },
+        "B": {
+          "agent": "DAG_structure",
+          "step": "After Agent_Verifier (iter 1) suggests next speaker",
+          "context": "Agent_Verifier outputs 'SUGGESTED NEXT SPEAKER: Agent Code Executor' but the edge to Agent_Code_Executor only carries this routing message, not the problem statement and solution from Agent_Problem_Solver.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor lacks proper carry_data configuration - it should pass the original problem statement AND the Problem Solver's solution, but instead only passes the routing message 'SUGGESTED NEXT SPEAKER', causing Code Executor to lack context and ask for the problem again.",
+          "dag_component": "edge_carry_data"
+        },
+        "C": {
+          "agent": "Agent_Code_Executor",
+          "step": "iter 1 - after Verifier suggests next speaker",
+          "context": "Agent_Code_Executor receives only 'SUGGESTED NEXT SPEAKER: Agent Code Executor' from Verifier, not the original problem statement, and asks 'Could you please provide the problem description'",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor carries only the Verifier's output (the suggestion text) via carry_data, losing the original problem context. The Code Executor should receive the problem statement but instead receives only the routing suggestion.",
+          "dag_component": "edge_carry_data"
+        },
+        "D": {
+          "agent": "DAG_structure",
+          "step": "iter 1: Agent_Verifier to Agent_Code_Executor edge",
+          "context": "Agent_Problem_Solver correctly solved the problem (answer 49), but Agent_Verifier only passed routing text 'SUGGESTED NEXT SPEAKER: Agent Code Executor' to Agent_Code_Executor without carrying the problem statement or solution.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor only carries the routing message, not the actual problem context. Agent_Code_Executor never receives the mathematical problem or the solution from Agent_Problem_Solver, causing it to repeatedly ask for the problem statement.",
+          "dag_component": "edge_carry_data"
+        },
+        "E": {
+          "agent": "DAG_structure",
+          "step": "Agent_Verifier to Agent_Code_Executor transition",
+          "context": "After Agent_Verifier (iter 1) outputs 'SUGGESTED NEXT SPEAKER: Agent Code Executor', Agent_Code_Executor receives only this suggestion text and asks 'Could you please provide the problem description'. The agents then enter a loop where they repeatedly suggest Agent_Problem_Solver without actually receiving the problem context.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor lacks proper carry_data configuration. When Agent_Verifier triggers Agent_Code_Executor, it only passes the suggestion text rather than carrying the original problem statement from USER and the solution from Agent_Problem_Solver. This causes Agent_Code_Executor to lack the necessary context to execute the task.",
+          "dag_component": "edge_carry_data"
+        },
+        "F": {
+          "agent": "Agent_Verifier",
+          "step": "Verification phase (iter 1)",
+          "context": "Agent_Problem_Solver provided a complete solution (n=1,11,37, sum=49), but Agent_Verifier only output 'SUGGESTED NEXT SPEAKER: Agent Code Executor' without actually verifying or passing the solution context.",
+          "root_cause": "The Verifier failed to perform verification - it prematurely passed control to Code_Executor without checking the solution, and critically failed to carry the Problem Solver's solution via the edge's carry_data, causing subsequent agents to lack the solution context.",
+          "dag_component": "agent_prompt"
+        }
+      }
+    },
+    {
+      "task_index": 21,
+      "trace_id": 21,
+      "mas_name": "AG2_MathChat",
+      "llm_name": "openai/gpt-oss-120b",
+      "benchmark_name": "AIME2025",
+      "trace_path": "/data/home/yuhan/optpilot/results/ag2_mathchat_skill_gpt-oss-120b_20260327_050837_artifacts/optimization/round_1/train/task_21/trace.txt",
+      "task_key": "Find the number of ordered pairs $(x,y)$, where bo",
+      "task_success": null,
+      "task_score": null,
+      "latency_s": null,
+      "active_fm_ids": [
+        "B",
+        "C",
+        "D"
+      ],
+      "labels": {
+        "A": {
+          "fm_name": "Instruction Non-Compliance",
+          "category": "A",
+          "present": false,
+          "confidence": 1.0
+        },
+        "B": {
+          "fm_name": "Execution Loop / Stuck",
+          "category": "B",
+          "present": true,
+          "confidence": 1.0
+        },
+        "C": {
+          "fm_name": "Context Loss",
+          "category": "C",
+          "present": true,
+          "confidence": 1.0
+        },
+        "D": {
+          "fm_name": "Communication Failure",
+          "category": "D",
+          "present": true,
+          "confidence": 1.0
+        },
+        "E": {
+          "fm_name": "Task Drift / Reasoning Error",
+          "category": "E",
+          "present": false,
+          "confidence": 1.0
+        },
+        "F": {
+          "fm_name": "Verification Failure",
+          "category": "F",
+          "present": false,
+          "confidence": 1.0
+        }
+      },
+      "localization": {
+        "B": {
+          "agent": "DAG_structure",
+          "step": "Agent_Code_Executor execution after Agent_Verifier",
+          "context": "Agent_Code_Executor repeatedly asks for the problem statement despite having received it, while Agent_Problem_Solver's solution is never passed to it. The agents enter a loop of passing 'SUGGESTED NEXT SPEAKER' messages.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor only carries the original USER input via carry_data, but does NOT carry Agent_Problem_Solver's solution output. This causes Agent_Code_Executor to lack the solution context and keep asking for problem details, creating an infinite loop.",
+          "dag_component": "edge_carry_data"
+        },
+        "C": {
+          "agent": "DAG_structure",
+          "step": "Loop iterations 81-90 where Agent_Code_Executor repeatedly loses problem context",
+          "context": "After iter 1, Agent_Code_Executor receives only routing messages ('SUGGESTED NEXT SPEAKER: Agent Problem Solver') instead of the problem statement. It asks for the problem 15+ times but never receives it.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor does not carry the original problem statement via carry_data. In loops, when Verifier triggers Code_Executor, only Verifier's output is passed, losing the initial USER input. The DAG lacks a path that preserves the problem context across loop iterations.",
+          "dag_component": "edge_carry_data"
+        },
+        "D": {
+          "agent": "DAG_structure",
+          "step": "iterations 80-90 where Agent_Code_Executor repeatedly fails to get problem context",
+          "context": "Agent_Code_Executor repeatedly claims it needs the problem statement despite having received it in iter 1. The Verifier triggers Code_Executor but only passes its own output 'SUGGESTED NEXT SPEAKER: Agent Code Executor', not the original problem statement.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor does not carry the original USER input or the Problem_Solver's solution. In loops, when Verifier triggers Code_Executor, Code_Executor only receives Verifier's output via carry_data, losing all problem context. This is a missing carry_data configuration - the edge should preserve the problem statement.",
+          "dag_component": "edge_carry_data"
+        }
+      }
+    }
+  ],
+  "validation_traces": [
+    {
+      "task_index": 22,
+      "trace_id": 22,
+      "mas_name": "AG2_MathChat",
+      "llm_name": "openai/gpt-oss-120b",
+      "benchmark_name": "AIME2025",
+      "trace_path": "/data/home/yuhan/optpilot/results/ag2_mathchat_skill_gpt-oss-120b_20260327_050837_artifacts/optimization/round_1/train/task_22/trace.txt",
+      "task_key": "The product $ \\prod_{k=4}^{63} \\frac{\\log_k(5^{k^2",
+      "task_success": null,
+      "task_score": null,
+      "latency_s": null,
+      "active_fm_ids": [
+        "B",
+        "C"
+      ],
+      "labels": {
+        "A": {
+          "fm_name": "Instruction Non-Compliance",
+          "category": "A",
+          "present": false,
+          "confidence": 1.0
+        },
+        "B": {
+          "fm_name": "Execution Loop / Stuck",
+          "category": "B",
+          "present": true,
+          "confidence": 1.0
+        },
+        "C": {
+          "fm_name": "Context Loss",
+          "category": "C",
+          "present": true,
+          "confidence": 1.0
+        },
+        "D": {
+          "fm_name": "Communication Failure",
+          "category": "D",
+          "present": false,
+          "confidence": 1.0
+        },
+        "E": {
+          "fm_name": "Task Drift / Reasoning Error",
+          "category": "E",
+          "present": false,
+          "confidence": 1.0
+        },
+        "F": {
+          "fm_name": "Verification Failure",
+          "category": "F",
+          "present": false,
+          "confidence": 1.0
+        }
+      },
+      "localization": {
+        "B": {
+          "agent": "Agent_Verifier",
+          "step": "Verification and finalization phase",
+          "context": "After Agent_Problem_Solver provided correct solution (106), Agent_Verifier repeatedly outputs 'SUGGESTED NEXT SPEAKER' without carrying the solution to final output, causing infinite cycling between agents.",
+          "root_cause": "Agent_Verifier's edge to final output lacks carry_data containing the actual solution result. Instead of outputting the verified answer, it only suggests next speakers, causing the system to loop indefinitely between agents without terminating with the answer.",
+          "dag_component": "edge_carry_data"
+        },
+        "C": {
+          "agent": "DAG_structure",
+          "step": "After Agent_Problem_Solver provides solution (iter 1), subsequent iterations lose the problem context",
+          "context": "Agent_Problem_Solver correctly solves the problem with answer 106 in iter 1, but in later iterations (80+) Agent_Code_Executor states 'No problem statement provided' despite the problem having been given initially",
+          "root_cause": "The edge carrying data from the initial solution to subsequent iterations failed to preserve context. After the first iteration, the problem statement and solution were not passed through carry_data to Agent_Code_Executor, causing it to repeatedly request the problem statement",
+          "dag_component": "edge_carry_data"
+        }
+      }
+    },
+    {
+      "task_index": 24,
+      "trace_id": 24,
+      "mas_name": "AG2_MathChat",
+      "llm_name": "openai/gpt-oss-120b",
+      "benchmark_name": "AIME2025",
+      "trace_path": "/data/home/yuhan/optpilot/results/ag2_mathchat_skill_gpt-oss-120b_20260327_050837_artifacts/optimization/round_1/train/task_24/trace.txt",
+      "task_key": "Suppose $ \\triangle ABC $ has angles $ \\angle BAC ",
+      "task_success": null,
+      "task_score": null,
+      "latency_s": null,
+      "active_fm_ids": [
+        "B",
+        "C",
+        "D"
+      ],
+      "labels": {
+        "A": {
+          "fm_name": "Instruction Non-Compliance",
+          "category": "A",
+          "present": false,
+          "confidence": 1.0
+        },
+        "B": {
+          "fm_name": "Execution Loop / Stuck",
+          "category": "B",
+          "present": true,
+          "confidence": 1.0
+        },
+        "C": {
+          "fm_name": "Context Loss",
+          "category": "C",
+          "present": true,
+          "confidence": 1.0
+        },
+        "D": {
+          "fm_name": "Communication Failure",
+          "category": "D",
+          "present": true,
+          "confidence": 1.0
+        },
+        "E": {
+          "fm_name": "Task Drift / Reasoning Error",
+          "category": "E",
+          "present": false,
+          "confidence": 1.0
+        },
+        "F": {
+          "fm_name": "Verification Failure",
+          "category": "F",
+          "present": false,
+          "confidence": 1.0
+        }
+      },
+      "localization": {
+        "B": {
+          "agent": "DAG_structure",
+          "step": "Loop iteration after Agent_Problem_Solver completes initial solution",
+          "context": "After Agent_Problem_Solver produces a solution, the system enters a loop where Agent_Verifier and Agent_Code_Executor repeatedly exchange control. Agent_Code_Executor repeatedly asks for the problem statement it never receives.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor lacks proper carry_data configuration - it only passes 'SUGGESTED NEXT SPEAKER' messages instead of the original problem statement. This causes Agent_Code_Executor to lack context and keep requesting the problem, creating an infinite loop.",
+          "dag_component": "edge_carry_data"
+        },
+        "C": {
+          "agent": "DAG_structure",
+          "step": "After Agent_Problem_Solver completes (iter 1), subsequent agents (Verifier, Code Executor) lose access to the original problem statement",
+          "context": "At iter 81, Agent_Verifier and Agent_Code_Executor repeatedly ask for the problem statement despite it being provided at the start. They output 'I don't see a specific problem statement' and 'I need the specific problem statement'. The loop counter reaches max iterations (5/5) but agents continue cycling.",
+          "root_cause": "The edge from Agent_Problem_Solver to downstream agents (Verifier/Code Executor) does not carry the original problem statement or the solution output. When the loop triggers, these agents only receive the previous agent's output (which is just routing messages like 'SUGGESTED NEXT SPEAKER') rather than the actual problem context.",
+          "dag_component": "edge_carry_data"
+        },
+        "D": {
+          "agent": "DAG_structure",
+          "step": "After Agent_Problem_Solver (iter 1) completes, subsequent agents repeatedly request problem statement",
+          "context": "Agent_Problem_Solver produces a complete solution in iter 1, but Agent_Code_Executor and Agent_Verifier in iters 81-90 keep asking for the problem statement they never received.",
+          "root_cause": "The edge from Agent_Problem_Solver to subsequent agents (Agent_Code_Executor/Agent_Verifier) is missing or lacks carry_data to pass the problem statement and solution context. Agents are trapped in a loop requesting input they never receive.",
+          "dag_component": "edge_missing"
+        }
+      }
+    },
+    {
+      "task_index": 33,
+      "trace_id": 33,
+      "mas_name": "AG2_MathChat",
+      "llm_name": "openai/gpt-oss-120b",
+      "benchmark_name": "MMLU",
+      "trace_path": "/data/home/yuhan/optpilot/results/ag2_mathchat_skill_gpt-oss-120b_20260327_050837_artifacts/optimization/round_1/train/task_33/trace.txt",
+      "task_key": "The rate, r, of a zero-order chemical reaction A →",
+      "task_success": null,
+      "task_score": null,
+      "latency_s": null,
+      "active_fm_ids": [
+        "B",
+        "C",
+        "D",
+        "F"
+      ],
+      "labels": {
+        "A": {
+          "fm_name": "Instruction Non-Compliance",
+          "category": "A",
+          "present": false,
+          "confidence": 1.0
+        },
+        "B": {
+          "fm_name": "Execution Loop / Stuck",
+          "category": "B",
+          "present": true,
+          "confidence": 1.0
+        },
+        "C": {
+          "fm_name": "Context Loss",
+          "category": "C",
+          "present": true,
+          "confidence": 1.0
+        },
+        "D": {
+          "fm_name": "Communication Failure",
+          "category": "D",
+          "present": true,
+          "confidence": 1.0
+        },
+        "E": {
+          "fm_name": "Task Drift / Reasoning Error",
+          "category": "E",
+          "present": false,
+          "confidence": 1.0
+        },
+        "F": {
+          "fm_name": "Verification Failure",
+          "category": "F",
+          "present": true,
+          "confidence": 1.0
+        }
+      },
+      "localization": {
+        "B": {
+          "agent": "DAG_structure",
+          "step": "After iter 1, when Agent_Verifier triggers Agent_Code_Executor",
+          "context": "Agent_Code_Executor receives 'SUGGESTED NEXT SPEAKER: Agent Code Executor' as input instead of the original problem statement, causing it to respond with generic messages about needing a problem statement.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor only carries the 'SUGGESTED NEXT SPEAKER' message via carry_data without preserving the original problem context. This causes subsequent agents to lose access to the task and enter a repetitive loop of passing generic speaker suggestions.",
+          "dag_component": "edge_carry_data"
+        },
+        "C": {
+          "agent": "DAG_structure",
+          "step": "Loop iterations 2-90",
+          "context": "After iter 1, Agent_Code_Executor successfully solves the problem, but from iter 80 onwards it repeatedly asks for the problem statement again, indicating context loss.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor only carries the 'SUGGESTED NEXT SPEAKER' message without the original problem context. The loop allows repeated cycling between agents without re-carrying the initial problem data, causing context to be lost after the first iteration.",
+          "dag_component": "edge_carry_data"
+        },
+        "D": {
+          "agent": "Agent_Verifier",
+          "step": "iter 1 - verification output",
+          "context": "Agent_Verifier receives the problem and Agent_Problem_Solver's correct solution but outputs only 'SUGGESTED NEXT SPEAKER: Agent_Code_Executor' without carrying the problem context or solution forward.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor lacks carry_data to pass the problem statement and solution. In loops, the Code Executor only receives what the previous agent outputs via carry_data, not the original USER input.",
+          "dag_component": "edge_carry_data"
+        },
+        "F": {
+          "agent": "Agent_Code_Executor",
+          "step": "iter 80-90 (loop iterations after initial solution)",
+          "context": "At iter 80, Agent_Code_Executor asks for the problem statement: 'I'm ready to help, but I need the specific problem statement or question you'd like solved.' This repeats through iter 90, indicating loss of original context.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor only carries the Verifier's output ('SUGGESTED NEXT SPEAKER: Agent_Code_Executor') via carry_data, not the original USER input containing the problem statement. The DAG fails to preserve context across the loop iterations.",
+          "dag_component": "edge_carry_data"
+        }
+      }
+    },
+    {
+      "task_index": 39,
+      "trace_id": 39,
+      "mas_name": "AG2_MathChat",
+      "llm_name": "openai/gpt-oss-120b",
+      "benchmark_name": "MMLU",
+      "trace_path": "/data/home/yuhan/optpilot/results/ag2_mathchat_skill_gpt-oss-120b_20260327_050837_artifacts/optimization/round_1/train/task_39/trace.txt",
+      "task_key": "How many human polyomaviruses are known at present",
+      "task_success": null,
+      "task_score": null,
+      "latency_s": null,
+      "active_fm_ids": [
+        "B",
+        "C",
+        "F"
+      ],
+      "labels": {
+        "A": {
+          "fm_name": "Instruction Non-Compliance",
+          "category": "A",
+          "present": false,
+          "confidence": 1.0
+        },
+        "B": {
+          "fm_name": "Execution Loop / Stuck",
+          "category": "B",
+          "present": true,
+          "confidence": 1.0
+        },
+        "C": {
+          "fm_name": "Context Loss",
+          "category": "C",
+          "present": true,
+          "confidence": 1.0
+        },
+        "D": {
+          "fm_name": "Communication Failure",
+          "category": "D",
+          "present": false,
+          "confidence": 1.0
+        },
+        "E": {
+          "fm_name": "Task Drift / Reasoning Error",
+          "category": "E",
+          "present": false,
+          "confidence": 1.0
+        },
+        "F": {
+          "fm_name": "Verification Failure",
+          "category": "F",
+          "present": true,
+          "confidence": 1.0
+        }
+      },
+      "localization": {
+        "B": {
+          "agent": "DAG_structure",
+          "step": "Loop entry after iter 1",
+          "context": "After Agent_Problem_Solver correctly answers (C) 10 in iter 1, the Verifier begins cycling between suggesting Agent Problem Solver and Agent Code Executor without carrying the original problem statement.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor only carries the Verifier's output (which is just 'SUGGESTED NEXT SPEAKER' text) instead of the original user problem. The loop counter reaches 5/5 but doesn't properly exit the loop, and the system continues cycling until max steps (200) is exceeded.",
+          "dag_component": "edge_carry_data"
+        },
+        "C": {
+          "agent": "DAG_structure",
+          "step": "iter 2-4 transition from answer to loop cycling",
+          "context": "After Agent_Problem_Solver correctly answers (C) 10 and Agent_Code_Executor confirms it, the Verifier begins cycling 'SUGGESTED NEXT SPEAKER' messages without carrying the original problem context. By iter 4, the Code Executor outputs placeholder code claiming 'no specific problem was provided' - the original question and answer have been lost.",
+          "root_cause": "The edge routing from Verifier to subsequent agents does not carry the original problem statement and answer forward. Instead, only the 'SUGGESTED NEXT SPEAKER' directive is passed, causing context loss. The DAG lacks proper carry_data configuration to preserve the task context across the loop iterations.",
+          "dag_component": "edge_carry_data"
+        },
+        "F": {
+          "agent": "Agent_Verifier",
+          "step": "verification phase",
+          "context": "Agent_Problem_Solver correctly identifies answer (C) 10, but Agent_Verifier never performs actual verification - it only outputs 'SUGGESTED NEXT SPEAKER' messages, causing infinite cycling between agents without producing a final verified answer.",
+          "root_cause": "Agent_Verifier's prompt lacks instructions to perform verification and produce a final synthesized answer. Instead, it only routes to other agents. Additionally, the DAG appears to be missing an edge that would lead from verification to final output termination.",
+          "dag_component": "agent_prompt"
+        }
+      }
+    },
+    {
+      "task_index": 41,
+      "trace_id": 41,
+      "mas_name": "AG2_MathChat",
+      "llm_name": "openai/gpt-oss-120b",
+      "benchmark_name": "MMLU",
+      "trace_path": "/data/home/yuhan/optpilot/results/ag2_mathchat_skill_gpt-oss-120b_20260327_050837_artifacts/optimization/round_1/train/task_41/trace.txt",
+      "task_key": "If you know both the actual brightness of an objec",
+      "task_success": null,
+      "task_score": null,
+      "latency_s": null,
+      "active_fm_ids": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F"
+      ],
+      "labels": {
+        "A": {
+          "fm_name": "Instruction Non-Compliance",
+          "category": "A",
+          "present": true,
+          "confidence": 1.0
+        },
+        "B": {
+          "fm_name": "Execution Loop / Stuck",
+          "category": "B",
+          "present": true,
+          "confidence": 1.0
+        },
+        "C": {
+          "fm_name": "Context Loss",
+          "category": "C",
+          "present": true,
+          "confidence": 1.0
+        },
+        "D": {
+          "fm_name": "Communication Failure",
+          "category": "D",
+          "present": true,
+          "confidence": 1.0
+        },
+        "E": {
+          "fm_name": "Task Drift / Reasoning Error",
+          "category": "E",
+          "present": true,
+          "confidence": 1.0
+        },
+        "F": {
+          "fm_name": "Verification Failure",
+          "category": "F",
+          "present": true,
+          "confidence": 1.0
+        }
+      },
+      "localization": {
+        "A": {
+          "agent": "Agent_Verifier",
+          "step": "iter 1 (first routing decision)",
+          "context": "After Agent_Problem_Solver correctly answers (D) distance, Agent_Verifier incorrectly routes to Agent_Code_Executor instead of finalizing the answer. Agent_Code_Executor then receives garbled partial code input and solves an unrelated rectangle area problem.",
+          "root_cause": "Agent_Verifier's prompt lacks clear criteria for when to finalize an answer vs. when to invoke code execution. The edge from Agent_Problem_Solver to Agent_Code_Executor carries corrupted data (partial Python code) instead of the original problem context, causing the loop where subsequent agents cannot access the original task.",
+          "dag_component": "edge_carry_data"
+        },
+        "B": {
+          "agent": "Agent_Verifier",
+          "step": "iter 1 -> iter 84 transition",
+          "context": "Agent_Verifier outputs only 'SUGGESTED NEXT SPEAKER: Agent Code Executor' without carrying the problem statement or solution. When Agent_Code_Executor is triggered, it receives only this routing instruction, not the actual problem context.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor lacks proper carry_data configuration - it does not pass the problem statement or the solution from Agent_Problem_Solver. This causes Agent_Code_Executor to have no context, leading it to output confused messages about needing the problem statement, which then feeds back into a loop where Agent_Verifier keeps suggesting speakers without context.",
+          "dag_component": "edge_carry_data"
+        },
+        "C": {
+          "agent": "Agent_Verifier",
+          "step": "iter 84-86 and beyond",
+          "context": "At iter 84, Agent_Verifier passes only 'SUGGESTED NEXT SPEAKER: Agent Code Executor' to Agent_Code_Executor, losing the original problem statement. Agent_Code_Executor then asks for the problem statement, unable to proceed.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor carries only the Verifier's routing output ('SUGGESTED NEXT SPEAKER') via carry_data, not the original problem context. This causes context loss in subsequent iterations as agents only receive routing messages instead of the task details.",
+          "dag_component": "edge_carry_data"
+        },
+        "D": {
+          "agent": "DAG_structure",
+          "step": "After Agent_Problem_Solver provides correct answer (iter 1), Agent_Verifier routing to Agent_Code_Executor instead of finalizing",
+          "context": "Agent_Problem_Solver correctly identifies answer (D) distance, but Agent_Verifier immediately routes to Agent_Code_Executor. Agent_Code_Executor then receives garbled input and asks for problem statement, creating a communication loop.",
+          "root_cause": "The edge from Agent_Verifier to Agent_Code_Executor is being triggered incorrectly - after a correct solution is provided, Agent_Verifier should either finalize or route back to Problem_Solver for verification, not to Code_Executor. Additionally, the carry_data on the edge is not properly forwarding the original problem statement to Code_Executor.",
+          "dag_component": "edge_carry_data"
+        },
+        "E": {
+          "agent": "Agent_Code_Executor",
+          "step": "iter 1 - Agent_Code_Executor execution",
+          "context": "Agent_Code_Executor received the astronomy question about brightness/distance but outputted Python code solving a completely different geometry problem (area with perimeter 60m).",
+          "root_cause": "Agent_Code_Executor's prompt lacks proper task anchoring - it generated code for an arbitrary problem instead of working on the actual astronomy question. The edge carry_data passed the problem but the agent's internal reasoning drifted to a self-selected task.",
+          "dag_component": "agent_prompt"
+        },
+        "F": {
+          "agent": "Agent_Verifier",
+          "step": "iter 1 - verification phase",
+          "context": "After Agent_Problem_Solver correctly identified (D) distance as the answer with proper reasoning, Agent_Verifier output 'SUGGESTED NEXT SPEAKER: Agent Code Executor' instead of verifying and providing final synthesis.",
+          "root_cause": "Agent_Verifier failed to verify the Problem Solver's correct solution and prematurely triggered Code Executor without proper verification. This caused Code Executor to receive incomplete context and solve an unrelated problem, leading to an infinite loop.",
+          "dag_component": "agent_prompt"
+        }
+      }
+    }
+  ]
+}

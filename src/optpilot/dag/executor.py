@@ -11,10 +11,11 @@ Produces a structured execution trace for diagnosis.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Coroutine
 
 from optpilot.dag.core import MASDAG, DAGNode, DAGEdge
 
@@ -107,6 +108,7 @@ def evaluate_condition(condition: str | dict, text: str) -> bool:
 # Type alias for the LLM call function that agent nodes use.
 # Signature: (system_prompt, user_message, model, **config) -> response_text
 LLMCallFn = Callable[..., str]
+AsyncLLMCallFn = Callable[..., Coroutine[Any, Any, str]]
 
 
 class DAGExecutor:
@@ -128,9 +130,11 @@ class DAGExecutor:
         model: str = "",
         max_global_steps: int = 200,
         timeout: int = 600,
+        async_llm_fn: AsyncLLMCallFn | None = None,
     ):
         self.dag = dag
         self.llm_fn = llm_fn
+        self.async_llm_fn = async_llm_fn
         self.model = model
         self.max_global_steps = max_global_steps
         self.timeout = timeout
@@ -384,3 +388,165 @@ class DAGExecutor:
                     pending.append(edge.target)
 
         return False
+
+    # ---- Async execution ----
+
+    async def arun(self, task_prompt: str) -> ExecutionTrace:
+        """Async version of run(). Requires async_llm_fn to be set."""
+        if self.async_llm_fn is None:
+            raise ValueError("async_llm_fn not set; pass it to __init__")
+
+        trace = ExecutionTrace(dag_id=self.dag.dag_id, task_prompt=task_prompt)
+        start_time = time.time()
+        step_count = 0
+
+        node_outputs: dict[str, str] = {}
+        node_inputs: dict[str, list[str]] = defaultdict(list)
+        loop_counts: dict[str, int] = {}
+        node_iterations: dict[str, int] = defaultdict(int)
+
+        start_nodes = self.dag.metadata.get("start", [])
+        if not start_nodes:
+            triggered_targets = {e.target for e in self.dag.edges if e.trigger}
+            all_nodes = set(self.dag.nodes.keys())
+            start_nodes = list(all_nodes - triggered_targets)
+
+        ready_queue: deque[str] = deque()
+        for nid in start_nodes:
+            node_inputs[nid].append(task_prompt)
+            ready_queue.append(nid)
+
+        for nid in start_nodes:
+            for edge in self._outgoing.get(nid, []):
+                if not edge.trigger and edge.carry_data:
+                    node_inputs[edge.target].append(task_prompt)
+
+        try:
+            while ready_queue:
+                if time.time() - start_time > self.timeout:
+                    trace.error = f"Timeout exceeded ({self.timeout}s)"
+                    break
+                if step_count >= self.max_global_steps:
+                    trace.error = f"Max steps exceeded ({self.max_global_steps})"
+                    break
+
+                node_id = ready_queue.popleft()
+                node = self.dag.nodes.get(node_id)
+                if node is None:
+                    continue
+
+                combined_input = "\n".join(node_inputs.get(node_id, []))
+                node_inputs[node_id] = []
+                node_iterations[node_id] += 1
+                step_count += 1
+
+                t0 = time.time()
+                output = await self._aexecute_node(node, combined_input)
+                duration = time.time() - t0
+
+                node_outputs[node_id] = output
+
+                trace.steps.append(NodeExecution(
+                    node_id=node_id,
+                    node_type=node.node_type,
+                    iteration=node_iterations[node_id],
+                    input_text=combined_input,
+                    output_text=output,
+                    duration_s=duration,
+                ))
+
+                for edge in self._outgoing.get(node_id, []):
+                    if not evaluate_condition(edge.condition, output):
+                        continue
+
+                    target_id = edge.target
+                    target_node = self.dag.nodes.get(target_id)
+                    if target_node is None:
+                        continue
+
+                    if target_node.node_type == "loop_counter":
+                        max_iter = target_node.config.get("max_iterations", 3)
+                        count = loop_counts.get(target_id, 0) + 1
+                        loop_counts[target_id] = count
+                        continue_edges, exit_edges = self._get_loop_edges(target_id)
+                        selected_edges = exit_edges if count >= max_iter else continue_edges
+                        if not selected_edges and not continue_edges and not exit_edges:
+                            selected_edges = [
+                                lc_edge
+                                for lc_edge in self._outgoing.get(target_id, [])
+                                if lc_edge.trigger
+                            ]
+
+                        if count >= max_iter:
+                            loop_counts[target_id] = 0
+                            node_outputs[target_id] = output
+                            trace.steps.append(NodeExecution(
+                                node_id=target_id,
+                                node_type="loop_counter",
+                                iteration=count,
+                                input_text=f"loop exhausted ({count}/{max_iter})",
+                                output_text=output,
+                            ))
+                            for lc_edge in selected_edges:
+                                if evaluate_condition(lc_edge.condition, output):
+                                    payload = output if lc_edge.carry_data else ""
+                                    node_inputs[lc_edge.target].append(payload)
+                                    if lc_edge.target not in ready_queue:
+                                        ready_queue.append(lc_edge.target)
+                        else:
+                            for lc_edge in selected_edges:
+                                if evaluate_condition(lc_edge.condition, output):
+                                    payload = output if lc_edge.carry_data else ""
+                                    node_inputs[lc_edge.target].append(payload)
+                                    if lc_edge.target not in ready_queue:
+                                        ready_queue.append(lc_edge.target)
+                        continue
+
+                    if edge.carry_data:
+                        node_inputs[target_id].append(output)
+                    else:
+                        node_inputs[target_id].append("")
+
+                    if edge.trigger and target_id not in ready_queue:
+                        ready_queue.append(target_id)
+
+            trace.finished = not bool(trace.error)
+
+        except Exception as e:
+            trace.error = str(e)
+
+        trace.total_duration_s = time.time() - start_time
+        return trace
+
+    async def _aexecute_node(self, node: DAGNode, input_text: str) -> str:
+        """Async version of _execute_node."""
+        if node.node_type == "agent":
+            return await self._aexecute_agent(node, input_text)
+        elif node.node_type == "literal":
+            return node.config.get("content", node.prompt) or node.prompt
+        elif node.node_type == "passthrough":
+            return input_text
+        elif node.node_type == "loop_counter":
+            return input_text
+        else:
+            return input_text
+
+    async def _aexecute_agent(self, node: DAGNode, input_text: str) -> str:
+        """Async version of _execute_agent."""
+        messages = []
+        system_prompt = node.prompt or node.role
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": input_text})
+
+        model = node.config.get("model") or self.model
+
+        params = node.config.get("params", {})
+        kwargs: dict[str, Any] = {}
+        for key in ("temperature", "max_tokens"):
+            if key in node.config:
+                kwargs[key] = node.config[key]
+            elif key in params:
+                kwargs[key] = params[key]
+
+        return await self.async_llm_fn(messages, model=model, **kwargs)

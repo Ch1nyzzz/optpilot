@@ -36,6 +36,18 @@ class NegativesStore:
         existing.extend(insights)
         self._save(fm_group, existing)
 
+    def clear(self, fm_group: str) -> None:
+        path = self._path(fm_group)
+        if path.exists():
+            path.unlink()
+
+    def clear_all(self) -> int:
+        removed = 0
+        for path in self.base_dir.glob("negatives_*.json"):
+            path.unlink()
+            removed += 1
+        return removed
+
     def _save(self, fm_group: str, insights: list[ReflectInsight]) -> None:
         data = [asdict(i) for i in insights]
         self._path(fm_group).write_text(

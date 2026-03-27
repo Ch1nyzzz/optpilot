@@ -51,7 +51,7 @@ optpilot/
 │   ├── offline_skills/        # Offline wrapped skills
 │   ├── online_hints/          # Online repair hints
 │   └── online_skills/         # Online wrapped skills
-├── results/                   # Experiment results and metrics
+├── results/                   # Experiment results, metrics, and per-run trace artifacts
 └── memory_bank/               # Project documentation
 ```
 
@@ -92,7 +92,7 @@ Loop counter 约定：
 | **Runner** | 用 DAGExecutor 执行 MASDAG，收集 trace + benchmark scoring |
 | **Diagnoser** | 6-group FM 分类 (MiniMax M2.5) + agent/step 定位 |
 | **Skill Workflows (A-F)** | 6 个 Python 类，每个 FM group 一个完整的修复 agent |
-| **SkillEvolver** | Skill 连续失败 ≥3 次 → LLM 修改 Skill 源码 → 动态加载 |
+| **SkillEvolver** | Skill 连续失败达到阈值（默认 3，可配置） → LLM 修改 Skill 源码 → 动态加载 |
 
 ### Skill 内部闭环
 
@@ -113,8 +113,9 @@ for outer_round in range(MAX_OUTER_ROUNDS=3):
 关键设计：
 - **Validation 基线缓存**：before_val_traces 在整个 run() 生命周期只算一次
 - **pass_rate 使用 task_score**：优先使用 ground-truth benchmark 评分（而非 task_success 完成率）
-- **Judge 条件**：FM rate 下降 AND pass_rate 上升
+- **Judge 条件**：FM rate 必须严格下降；同时没有真实 DAG diff 的 repair 不允许判 success
 - **SkillBudget**：max_llm_calls=30 / max_batch_runs=10 / max_wall_time_s=600
+- **失败快照**：若 outer round 因 no-op repair 或 budget exhaustion 未进入正常 reflect，也会生成合成 ReflectInsight，避免 `outer_rounds=0, n_negatives=0` 的黑箱失败
 
 ### 并行 Skill 执行
 
@@ -123,11 +124,51 @@ Orchestrator 收集所有结果，选最佳成功结果采纳到主 DAG。
 
 ### Meta-Evolution
 
-当 Skill 连续失败 ≥3 次：
-1. SkillEvolver 读取 Skill 的 Python 源码 + 累积 ReflectInsight
-2. LLM 生成修改版代码
-3. compile() 语法检查 → 保存到 library_store/evolved_skills/
-4. importlib 动态加载替换注册表中的旧版本
+当 Skill 连续失败达到阈值（默认 `OPTPILOT_META_EVOLVE_FAILURE_THRESHOLD=3`）：
+1. SkillEvolver 为 meta-agent 准备临时工作区：`$SKILL_FILE`、`meta_context.md`、`failure_summary.md`、`failures.json`
+2. `meta_context.md` 提供 repo 绝对路径和一句话摘要，指向 `skills/base.py`、`skills/tools.py`、`skills/registry.py`、`dag/executor.py`、`models.py`、`memory_bank/*`、negatives/subskills/evolved_skills 等持久信息地址
+3. meta-agent 用 `bash` 自己查看这些文件，只依赖摘要做索引而不是把全部内容塞进 prompt
+4. LLM 在更宽松预算下执行 tool-calling（默认 `OPTPILOT_META_EVOLVE_MAX_TURNS=30`，`OPTPILOT_META_EVOLVE_MAX_TOKENS=32768`）
+5. compile() 语法检查 → 保存到 `library_store/evolved_skills/`
+6. importlib 动态加载替换注册表中的旧版本
+
+### Agent Context Indexing
+
+普通 Skill evolve agent 也会在临时工作区收到 `agent_context.md`：
+- 提供 diagnosis 摘要
+- 列出 trace 文件位置
+- 提供 executor/core/models/memory_bank/negatives/subskills/skill_agent_traces 的绝对路径
+- 要求 agent 使用 `bash` (`cat` / `sed -n` / `rg`) 自己检查需要的文件
+
+### Persistent Trace Artifacts
+
+在线实验入口会把完整 trace 持久化到 `results/*_artifacts/`：
+- Skill workflow: `optimization/round_k/train/task_i/trace.txt`，以及 `test_final/`、`test_baseline/`
+- Baseline workflow: `train/task_i/trace.txt` 和 `test/task_i/trace.txt`
+- 每个 `task_i/` 还会写 `trace.json`，保存 `benchmark_name`、`task_prompt`、`task_score`、`task_success`、`latency_s` 等 sidecar metadata
+- `MASTrace.trace_path` 会携带真实持久化路径，skill agent 优先读取这个路径；只有缺失时才回退到临时副本
+
+### Persistent Diagnose Artifacts
+
+warm-start 和常规优化都应把 diagnose 结果持久化，方便后续直接复用：
+- `optimization/round_k/diagnose/profiles.json`: 每条 trace 的 labels/localization + trace metadata
+- `optimization/round_k/diagnose/fm_groups/<FM>.json`: 按 FM 分组后的 trace 清单
+- `optimization/round_k/diagnose/skill_jobs/<FM>.json`: proposal/validation split 结果，供 skill repair 直接消费
+- 若是从旧 train traces warm-start，还会写 `optimization/round_k/reused_train_manifest.json` 指向原始 trace 路径
+
+### Persistent Tool Traces
+
+Skill / meta-evolve agent 的 tool-calling transcript 也会持久化到 `library_store/`：
+- Skill evolve agent: `library_store/skill_agent_traces/<FM>/tool_trace_<timestamp>.json`
+- Meta-evolve agent: `library_store/meta_evolve_traces/<FM>/tool_trace_<timestamp>.json`
+- meta-evolve 的 `meta_context.md` 会显式给出这些目录和最近几条 transcript 的绝对路径，供 agent 自己用 `bash` 检查
+
+### DAG Version Artifacts
+
+在线实验入口也会把 DAG 版本持久化到 `results/*_artifacts/dag_versions/`：
+- Skill workflow: `input.yaml`、`optimization/initial.yaml`、`optimization/round_k/start.yaml`、成功 skill 的 `skill_<FM>_success.yaml`、`optimization/round_k/final.yaml`、`final.yaml`、`optimized_final.yaml`、`baseline_reference.yaml`
+- Baseline workflow: `baseline_input.yaml`、`baseline_final.yaml`
+- 目的是保证每次优化和 baseline 对比时，都能直接复用同一批 DAG 工件
 
 ## Online Validation Protocol
 
@@ -137,7 +178,7 @@ proposal / validation 分离：
 
 验证标准：
 - 目标 FM 在 validation 上下降
-- pass_rate 上升（使用 ground-truth benchmark scorer）
+- repair 后的 DAG 必须与原 DAG 有真实差异
 
 ## LLM Concurrency Control
 

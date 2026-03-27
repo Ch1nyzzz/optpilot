@@ -1,0 +1,123 @@
+{
+  "experiment": "ag2_mathchat_skill_workflow",
+  "model": "openai/gpt-oss-120b",
+  "dag": "AG2_MathChat",
+  "n_train": 100,
+  "n_test": 100,
+  "max_rounds": 1,
+  "target_group": null,
+  "concurrency": 256,
+  "timeout_s": 600,
+  "optimization": {
+    "total_rounds": 1,
+    "results": [
+      {
+        "round": 1,
+        "fm_id": "B",
+        "fm_name": "Execution Loop / Stuck",
+        "success": false,
+        "inner_iterations": 4,
+        "outer_rounds": 1,
+        "final_fm_rate": 1.0,
+        "final_pass_rate": 0.0,
+        "n_negatives": 1
+      },
+      {
+        "round": 1,
+        "fm_id": "F",
+        "fm_name": "Verification Failure",
+        "success": false,
+        "inner_iterations": 3,
+        "outer_rounds": 1,
+        "final_fm_rate": 1.0,
+        "final_pass_rate": 0.0,
+        "n_negatives": 1
+      },
+      {
+        "round": 1,
+        "fm_id": "D",
+        "fm_name": "Communication Failure",
+        "success": false,
+        "inner_iterations": 4,
+        "outer_rounds": 0,
+        "final_fm_rate": 1.0,
+        "final_pass_rate": 0.0,
+        "n_negatives": 0
+      },
+      {
+        "round": 1,
+        "fm_id": "C",
+        "fm_name": "Context Loss",
+        "success": false,
+        "inner_iterations": 4,
+        "outer_rounds": 0,
+        "final_fm_rate": 1.0,
+        "final_pass_rate": 0.0,
+        "n_negatives": 0
+      },
+      {
+        "round": 1,
+        "fm_id": "E",
+        "fm_name": "Task Drift / Reasoning Error",
+        "success": false,
+        "inner_iterations": 2,
+        "outer_rounds": 2,
+        "final_fm_rate": 1.0,
+        "final_pass_rate": 0.0,
+        "n_negatives": 2
+      }
+    ]
+  },
+  "test_baseline": {
+    "overall_accuracy": 0.4,
+    "elapsed_s": 587.9010620117188,
+    "per_benchmark": {
+      "AIME2024": {
+        "n": 15,
+        "correct": 6,
+        "accuracy": 0.4
+      },
+      "AIME2025": {
+        "n": 15,
+        "correct": 4,
+        "accuracy": 0.26666666666666666
+      },
+      "MMLU": {
+        "n": 35,
+        "correct": 28,
+        "accuracy": 0.8
+      },
+      "OlympiadBench": {
+        "n": 35,
+        "correct": 2,
+        "accuracy": 0.05714285714285714
+      }
+    }
+  },
+  "test_final": {
+    "overall_accuracy": 0.46,
+    "elapsed_s": 602.7707295417786,
+    "per_benchmark": {
+      "AIME2024": {
+        "n": 15,
+        "correct": 9,
+        "accuracy": 0.6
+      },
+      "AIME2025": {
+        "n": 15,
+        "correct": 5,
+        "accuracy": 0.3333333333333333
+      },
+      "MMLU": {
+        "n": 35,
+        "correct": 29,
+        "accuracy": 0.8285714285714286
+      },
+      "OlympiadBench": {
+        "n": 35,
+        "correct": 3,
+        "accuracy": 0.08571428571428572
+      }
+    }
+  }
+}

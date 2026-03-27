@@ -323,7 +323,7 @@ def call_llm(
     messages: list[dict[str, str]],
     model: str = SYSTEM_MODEL,
     temperature: float = 0.2,
-    max_tokens: int = 8192,
+    max_tokens: int = 16384,
     max_retries: int = 3,
 ) -> str:
     """Call Together AI LLM with exponential backoff.
@@ -369,7 +369,7 @@ async def acall_llm(
     messages: list[dict[str, str]],
     model: str = SYSTEM_MODEL,
     temperature: float = 0.2,
-    max_tokens: int = 8192,
+    max_tokens: int = 16384,
     max_retries: int = 3,
 ) -> str:
     """Async Together AI call with model-family concurrency and RPM limits."""
@@ -405,11 +405,102 @@ async def acall_llm(
     return ""
 
 
+async def acall_llm_with_tools(
+    messages: list[dict],
+    tools: list[dict],
+    tool_executor: Any,
+    model: str = SYSTEM_MODEL,
+    temperature: float = 0.2,
+    max_tokens: int = 16384,
+    max_turns: int = 20,
+    max_retries: int = 3,
+) -> list[dict]:
+    """Async LLM agent loop with tool calling.
+
+    Calls the LLM, executes any tool calls via ``tool_executor(name, args)``,
+    feeds results back, and repeats until the LLM stops calling tools or
+    ``max_turns`` is reached.
+
+    Args:
+        tool_executor: callable(name: str, arguments: dict) -> str
+
+    Returns the full message history including tool call/result messages.
+    """
+    client = get_async_client()
+    msgs = list(messages)
+
+    for _turn in range(max_turns):
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": msgs,
+            "tools": tools,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        resp = None
+        for attempt in range(max_retries):
+            try:
+                async with get_async_rate_limiter(model):
+                    resp = await client.chat.completions.create(**kwargs)
+                break
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    raise
+                err_str = str(e)
+                if "rate_limit" in err_str or "429" in err_str:
+                    wait = 30 * (attempt + 1)
+                else:
+                    wait = 2 ** (attempt + 1)
+                print(f"LLM tool call failed (attempt {attempt + 1}): {e}. Retrying in {wait}s...")
+                await asyncio.sleep(wait)
+
+        if resp is None:
+            break
+
+        choice = resp.choices[0]
+        assistant_msg = choice.message
+
+        # Append the assistant message
+        msg_dict: dict[str, Any] = {"role": "assistant"}
+        if assistant_msg.content:
+            msg_dict["content"] = assistant_msg.content
+        if assistant_msg.tool_calls:
+            msg_dict["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in assistant_msg.tool_calls
+            ]
+        msgs.append(msg_dict)
+
+        # If no tool calls, we're done
+        if not assistant_msg.tool_calls:
+            break
+
+        # Execute each tool call and append results
+        for tc in assistant_msg.tool_calls:
+            try:
+                args = json.loads(tc.function.arguments)
+            except json.JSONDecodeError:
+                args = {}
+            result_str = tool_executor(tc.function.name, args)
+            msgs.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": result_str,
+            })
+
+    return msgs
+
+
 def call_llm_json(
     messages: list[dict[str, str]],
     model: str = SYSTEM_MODEL,
     temperature: float = 0.2,
-    max_tokens: int = 8192,
+    max_tokens: int = 16384,
 ) -> dict:
     """Call LLM and parse JSON response.
 
@@ -432,7 +523,7 @@ async def acall_llm_json(
     messages: list[dict[str, str]],
     model: str = SYSTEM_MODEL,
     temperature: float = 0.2,
-    max_tokens: int = 8192,
+    max_tokens: int = 16384,
 ) -> dict:
     """Async variant of ``call_llm_json``."""
     content = await acall_llm(

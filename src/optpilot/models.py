@@ -22,6 +22,7 @@ class MASTrace:
     llm_name: str          # "GPT-4o", "gpt-oss-120b"
     benchmark_name: str    # "ProgramDev"
     trajectory: str        # full conversation log
+    trace_path: str = ""   # persisted trace artifact path, if saved
     task_key: str = ""     # task identifier
     mast_annotation: dict[str, int] = field(default_factory=dict)  # group_id -> 0/1
     task_success: bool | None = None
@@ -45,10 +46,11 @@ class FMLabel:
 
 @dataclass
 class FMLocalization:
-    agent: str         # which agent
+    agent: str         # which agent, or "DAG_structure"
     step: str          # which phase/step
     context: str       # relevant snippet
     root_cause: str    # analysis
+    dag_component: str = "other"  # agent_prompt | edge_carry_data | edge_condition | edge_missing | loop_config | node_config | other
 
 
 @dataclass
@@ -147,6 +149,8 @@ class EvolveResult:
     modified_yaml: str          # complete modified YAML
     change_description: str     # one-line summary
     actions_taken: list[str] = field(default_factory=list)  # human-readable diffs
+    change_records: list[Any] = field(default_factory=list)  # ChangeRecord list for Forger replay
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

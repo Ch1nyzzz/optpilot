@@ -1,0 +1,1654 @@
+{
+  "experiment": "ag2_mathchat_baseline",
+  "model": "openai/gpt-oss-120b",
+  "dag": "AG2_MathChat",
+  "timestamp": "20260327_012324",
+  "train": {
+    "n_tasks": 100,
+    "overall_accuracy": 0.46,
+    "elapsed_s": 1036.2338361740112,
+    "per_benchmark": {
+      "AIME2025": {
+        "n": 15,
+        "correct": 8,
+        "accuracy": 0.5333333333333333
+      },
+      "MMLU": {
+        "n": 43,
+        "correct": 31,
+        "accuracy": 0.7209302325581395
+      },
+      "OlympiadBench": {
+        "n": 42,
+        "correct": 7,
+        "accuracy": 0.16666666666666666
+      }
+    },
+    "details": [
+      {
+        "task_id": 0,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 24.127443313598633,
+        "task_key": "Find the sum of all integer bases $b>9$ for which "
+      },
+      {
+        "task_id": 1,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 508.57950234413147,
+        "task_key": "Six points $ A, B, C, D, E, $ and $ F $ lie in a s"
+      },
+      {
+        "task_id": 2,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 535.2812280654907,
+        "task_key": "On $\\triangle ABC$ points $A,D,E$, and $B$ lie tha"
+      },
+      {
+        "task_id": 3,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 462.7424683570862,
+        "task_key": "Find the sum of all positive integers $ n $ such t"
+      },
+      {
+        "task_id": 4,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 461.21668910980225,
+        "task_key": "The 9 members of a baseball team went to an ice cr"
+      },
+      {
+        "task_id": 5,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 600.237598657608,
+        "task_key": "Four unit squares form a $2 \\times 2$ grid. Each o"
+      },
+      {
+        "task_id": 6,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 517.2463808059692,
+        "task_key": "Find the number of ordered pairs $(x,y)$, where bo"
+      },
+      {
+        "task_id": 7,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 485.8066418170929,
+        "task_key": "The product $ \\prod_{k=4}^{63} \\frac{\\log_k(5^{k^2"
+      },
+      {
+        "task_id": 8,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 530.3583540916443,
+        "task_key": "There are $8!=40320$ eight-digit positive integers"
+      },
+      {
+        "task_id": 9,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 601.3742125034332,
+        "task_key": "Suppose $ \\triangle ABC $ has angles $ \\angle BAC "
+      },
+      {
+        "task_id": 10,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 502.1634407043457,
+        "task_key": "An isosceles trapezoid has an inscribed circle tan"
+      },
+      {
+        "task_id": 11,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 508.17103576660156,
+        "task_key": "Circle $\\omega_1$ with radius 6 centered at point "
+      },
+      {
+        "task_id": 12,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 111.93400359153748,
+        "task_key": "The twelve letters $A,B,C,D,E,F,G,H,I,J,K$, and $L"
+      },
+      {
+        "task_id": 13,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 494.4912371635437,
+        "task_key": "Let $ A $ be the set of positive integer divisors "
+      },
+      {
+        "task_id": 14,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 461.41946268081665,
+        "task_key": "Let $k$ be real numbers such that the system $|25+"
+      },
+      {
+        "task_id": 15,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 431.30708956718445,
+        "task_key": "Find the degree for the given field extension Q(sq"
+      },
+      {
+        "task_id": 16,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 452.67954182624817,
+        "task_key": "What is true for a type-Ia (\"type one-a\") supernov"
+      },
+      {
+        "task_id": 17,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 453.19543981552124,
+        "task_key": "_______ such as bitcoin are becoming increasingly "
+      },
+      {
+        "task_id": 18,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 432.07648181915283,
+        "task_key": "The rate, r, of a zero-order chemical reaction A →"
+      },
+      {
+        "task_id": 19,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 467.720769405365,
+        "task_key": "Which one of the following is the most appropriate"
+      },
+      {
+        "task_id": 20,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 453.68081188201904,
+        "task_key": "Identify the conclusion of the following argument."
+      },
+      {
+        "task_id": 21,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 451.53911900520325,
+        "task_key": "If a pentagon P with vertices at (– 2, – 4), (– 4,"
+      },
+      {
+        "task_id": 22,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 457.6817009449005,
+        "task_key": "Which State ordinarily exercises jurisdiction in r"
+      },
+      {
+        "task_id": 23,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 458.11957025527954,
+        "task_key": "One afternoon, a pilot was flying a small airplane"
+      },
+      {
+        "task_id": 24,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 439.89367747306824,
+        "task_key": "How many human polyomaviruses are known at present"
+      },
+      {
+        "task_id": 25,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 28.665552377700806,
+        "task_key": "Let p = (1, 2, 5, 4)(2, 3) in S_5 . Find the index"
+      },
+      {
+        "task_id": 26,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 448.5338456630707,
+        "task_key": "If you know both the actual brightness of an objec"
+      },
+      {
+        "task_id": 27,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 444.92364025115967,
+        "task_key": "Typical advertising regulatory bodies suggest, for"
+      },
+      {
+        "task_id": 28,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 434.2552568912506,
+        "task_key": "Infrared (IR) spectroscopy is useful for determini"
+      },
+      {
+        "task_id": 29,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 444.8672385215759,
+        "task_key": "What is the main difference between the Dickey Ful"
+      },
+      {
+        "task_id": 30,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 442.5909285545349,
+        "task_key": "Select the best translation into predicate logic. "
+      },
+      {
+        "task_id": 31,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 439.60143876075745,
+        "task_key": "The length of a rectangle is twice its width. Give"
+      },
+      {
+        "task_id": 32,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 438.83556604385376,
+        "task_key": "What is the meaning of justiciability?\n\nOptions:\n("
+      },
+      {
+        "task_id": 33,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 24.87468671798706,
+        "task_key": "A state statute provides: \"Whenever a person knows"
+      },
+      {
+        "task_id": 34,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 448.4463794231415,
+        "task_key": "AIDS activism in the U.S. resulted in:\n\nOptions:\n("
+      },
+      {
+        "task_id": 35,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 467.30244874954224,
+        "task_key": "Find all zeros in the indicated finite field of th"
+      },
+      {
+        "task_id": 36,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 445.4179799556732,
+        "task_key": "Why is the sky blue?\n\nOptions:\n(A) Because the mol"
+      },
+      {
+        "task_id": 37,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 431.0408492088318,
+        "task_key": "______ are the obligations of workers towards thei"
+      },
+      {
+        "task_id": 38,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 437.1155469417572,
+        "task_key": "What is the maximum number of phases that can be a"
+      },
+      {
+        "task_id": 39,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 443.25563073158264,
+        "task_key": "If there were a leverage effect in practice, what "
+      },
+      {
+        "task_id": 40,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 16.837296724319458,
+        "task_key": "Select the best English interpretation of the give"
+      },
+      {
+        "task_id": 41,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 442.74594807624817,
+        "task_key": "A positive integer n is called “powerful” if, for "
+      },
+      {
+        "task_id": 42,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 458.5434546470642,
+        "task_key": "In what way is Responsibility to Protect (R2P) dif"
+      },
+      {
+        "task_id": 43,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 444.87667322158813,
+        "task_key": "A taxpayer was notified by the government that her"
+      },
+      {
+        "task_id": 44,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 464.72868156433105,
+        "task_key": "Globally, the most deaths are caused by:\n\nOptions:"
+      },
+      {
+        "task_id": 45,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 34.249937295913696,
+        "task_key": "Statement 1 | A factor group of a non-Abelian grou"
+      },
+      {
+        "task_id": 46,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 440.7280466556549,
+        "task_key": "You’ve made a scientific theory that there is an a"
+      },
+      {
+        "task_id": 47,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 442.92635464668274,
+        "task_key": "______ is an employee's preferred ratio between wo"
+      },
+      {
+        "task_id": 48,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 498.30810618400574,
+        "task_key": "When the following equation is balanced, which of "
+      },
+      {
+        "task_id": 49,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 449.3421223163605,
+        "task_key": "Which of the following statements is false concern"
+      },
+      {
+        "task_id": 50,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 460.9210684299469,
+        "task_key": "Construct a complete truth table for the following"
+      },
+      {
+        "task_id": 51,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 439.6325628757477,
+        "task_key": "At breakfast, lunch, and dinner, Joe randomly choo"
+      },
+      {
+        "task_id": 52,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 436.81572818756104,
+        "task_key": "What is the 'Lotus principle'?\n\nOptions:\n(A) The s"
+      },
+      {
+        "task_id": 53,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 22.02151322364807,
+        "task_key": "A resident announced his candidacy for state repre"
+      },
+      {
+        "task_id": 54,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 510.77947998046875,
+        "task_key": "What happens during the 'incubation period'?\n\nOpti"
+      },
+      {
+        "task_id": 55,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 520.1330723762512,
+        "task_key": "Find the product of the given polynomials in the g"
+      },
+      {
+        "task_id": 56,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 465.19400906562805,
+        "task_key": "Which of the following is/are true?\n\nOptions:\n(A) "
+      },
+      {
+        "task_id": 57,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 454.6941945552826,
+        "task_key": "_______ can be a likened to their natural counterp"
+      },
+      {
+        "task_id": 58,
+        "benchmark": "OlympiadBench",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 547.8132178783417,
+        "task_key": "Xenia and Sergey play the following game. Xenia th"
+      },
+      {
+        "task_id": 59,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 503.38193917274475,
+        "task_key": "Given a positive integer $n$, determine the larges"
+      },
+      {
+        "task_id": 60,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 456.9949014186859,
+        "task_key": "Find (in closed form) the difference between the n"
+      },
+      {
+        "task_id": 61,
+        "benchmark": "OlympiadBench",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 82.72941327095032,
+        "task_key": "Determine all positive integers $n$ satisfying the"
+      },
+      {
+        "task_id": 62,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 603.258359670639,
+        "task_key": "Let $n$ be an integer greater than 1 and let $X$ b"
+      },
+      {
+        "task_id": 63,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 542.1706488132477,
+        "task_key": "Let $n \\geqslant 2$ be an integer, and let $f$ be "
+      },
+      {
+        "task_id": 64,
+        "benchmark": "OlympiadBench",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 157.5190932750702,
+        "task_key": "For a positive integer $a$, define a sequence of i"
+      },
+      {
+        "task_id": 65,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 65.93839406967163,
+        "task_key": "Let $n$ be a positive integer and fix $2 n$ distin"
+      },
+      {
+        "task_id": 66,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 478.85877323150635,
+        "task_key": "Given positive integers $m$ and $n \\geq m$, determ"
+      },
+      {
+        "task_id": 67,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 64.69240713119507,
+        "task_key": "A cubic sequence is a sequence of integers given b"
+      },
+      {
+        "task_id": 68,
+        "benchmark": "OlympiadBench",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 539.293399810791,
+        "task_key": "Find all functions $f: \\mathbb{R}^{+} \\rightarrow "
+      },
+      {
+        "task_id": 69,
+        "benchmark": "OlympiadBench",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 104.21099185943604,
+        "task_key": "Let $n>1$ be an integer. In the space, consider th"
+      },
+      {
+        "task_id": 70,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 557.1674735546112,
+        "task_key": "Find all positive integers $n$, for which the numb"
+      },
+      {
+        "task_id": 71,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 600.9241921901703,
+        "task_key": "Determine the smallest positive real number $k$ wi"
+      },
+      {
+        "task_id": 72,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 121.0981297492981,
+        "task_key": "Find all surjective functions $f: \\mathbb{N} \\righ"
+      },
+      {
+        "task_id": 73,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 168.18167686462402,
+        "task_key": "Determine all pairs $(f, g)$ of functions from the"
+      },
+      {
+        "task_id": 74,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 473.48114228248596,
+        "task_key": "Determine the greatest positive integer $k$ that s"
+      },
+      {
+        "task_id": 75,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 468.95925188064575,
+        "task_key": "Let $m$ be a positive integer and consider a check"
+      },
+      {
+        "task_id": 76,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 50.610472440719604,
+        "task_key": "On a square table of 2011 by 2011 cells we place a"
+      },
+      {
+        "task_id": 77,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 40.047308683395386,
+        "task_key": "For each positive integer $k$, let $t(k)$ be the l"
+      },
+      {
+        "task_id": 78,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 64.32461214065552,
+        "task_key": "Let $x_{1}, \\ldots, x_{100}$ be nonnegative real n"
+      },
+      {
+        "task_id": 79,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 410.0052707195282,
+        "task_key": "Denote by $\\mathbb{Q}^{+}$the set of all positive "
+      },
+      {
+        "task_id": 80,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 439.8612024784088,
+        "task_key": "On some planet, there are $2^{N}$ countries $(N \\g"
+      },
+      {
+        "task_id": 81,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 384.18027424812317,
+        "task_key": "2500 chess kings have to be placed on a $100 \\time"
+      },
+      {
+        "task_id": 82,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 369.2652094364166,
+        "task_key": "Find the least positive integer $n$ for which ther"
+      },
+      {
+        "task_id": 83,
+        "benchmark": "OlympiadBench",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 72.05669116973877,
+        "task_key": "Find the smallest number $n$ such that there exist"
+      },
+      {
+        "task_id": 84,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 386.58527731895447,
+        "task_key": "Determine the smallest number $M$ such that the in"
+      },
+      {
+        "task_id": 85,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 501.5858268737793,
+        "task_key": "A diagonal of a regular 2006-gon is called odd if "
+      },
+      {
+        "task_id": 86,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 32.37307953834534,
+        "task_key": "In triangle $A B C$, let $J$ be the centre of the "
+      },
+      {
+        "task_id": 87,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 378.5502371788025,
+        "task_key": "Given a positive integer $n$, find the smallest va"
+      },
+      {
+        "task_id": 88,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 359.5537850856781,
+        "task_key": "Let $n \\geqslant 3$ be an integer. An integer $m \\"
+      },
+      {
+        "task_id": 89,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 129.73584961891174,
+        "task_key": "Determine the largest $N$ for which there exists a"
+      },
+      {
+        "task_id": 90,
+        "benchmark": "OlympiadBench",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 117.76164031028748,
+        "task_key": "Determine all integers $n \\geqslant 1$ for which t"
+      },
+      {
+        "task_id": 91,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 400.53253531455994,
+        "task_key": "Find all positive integers $n$ with the following "
+      },
+      {
+        "task_id": 92,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 69.50695300102234,
+        "task_key": "Let $q$ be a real number. Gugu has a napkin with t"
+      },
+      {
+        "task_id": 93,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 593.3338005542755,
+        "task_key": "An integer $n \\geqslant 3$ is given. We call an $n"
+      },
+      {
+        "task_id": 94,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 482.0748019218445,
+        "task_key": "Let $n>1$ be an integer. An $n \\times n \\times n$ "
+      },
+      {
+        "task_id": 95,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 383.7161741256714,
+        "task_key": "Let $n$ be a given positive integer. In the Cartes"
+      },
+      {
+        "task_id": 96,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 386.18004298210144,
+        "task_key": "There are 2017 mutually external circles drawn on "
+      },
+      {
+        "task_id": 97,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 376.3417282104492,
+        "task_key": "Call a rational number short if it has finitely ma"
+      },
+      {
+        "task_id": 98,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 377.1567277908325,
+        "task_key": "Find the smallest positive integer $n$, or show th"
+      },
+      {
+        "task_id": 99,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 350.78756189346313,
+        "task_key": "Find the smallest real constant $C$ such that for "
+      }
+    ]
+  },
+  "test": {
+    "n_tasks": 100,
+    "overall_accuracy": 0.44,
+    "elapsed_s": 905.1938560009003,
+    "per_benchmark": {
+      "AIME2025": {
+        "n": 15,
+        "correct": 7,
+        "accuracy": 0.4666666666666667
+      },
+      "MMLU": {
+        "n": 43,
+        "correct": 35,
+        "accuracy": 0.813953488372093
+      },
+      "OlympiadBench": {
+        "n": 42,
+        "correct": 2,
+        "accuracy": 0.047619047619047616
+      }
+    },
+    "details": [
+      {
+        "task_id": 0,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 130.78033828735352,
+        "task_key": "From an unlimited supply of 1-cent coins, 10-cent "
+      },
+      {
+        "task_id": 1,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 112.91614890098572,
+        "task_key": "The parabola with equation $y=x^{2}-4$ is rotated "
+      },
+      {
+        "task_id": 2,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 515.818042755127,
+        "task_key": "There are $ n $ values of $ x $ in the interval $ "
+      },
+      {
+        "task_id": 3,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 565.0339496135712,
+        "task_key": "The 27 cells of a $3\\times9$ grid are filled in us"
+      },
+      {
+        "task_id": 4,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 40.50305962562561,
+        "task_key": "Sixteen chairs are arranged in a row. Eight people"
+      },
+      {
+        "task_id": 5,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 178.5973310470581,
+        "task_key": "A piecewise linear periodic function is defined by"
+      },
+      {
+        "task_id": 6,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 586.2291145324707,
+        "task_key": "Let $ S $ be the set of vertices of a regular 24-g"
+      },
+      {
+        "task_id": 7,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 417.63456535339355,
+        "task_key": "The set of points in 3-dimensional coordinate spac"
+      },
+      {
+        "task_id": 8,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 133.9921247959137,
+        "task_key": "Let $ A_1A_2 \\ldots A_{11} $ be an 11-sided non-co"
+      },
+      {
+        "task_id": 9,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 519.7289688587189,
+        "task_key": "Alex divides a disk into four quadrants with two p"
+      },
+      {
+        "task_id": 10,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 115.20245623588562,
+        "task_key": "Let the sequence of rationals $ x_1, x_2, \\ldots $"
+      },
+      {
+        "task_id": 11,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 600.972226858139,
+        "task_key": "Let $ABCDE$ be a convex pentagon with $AB=14, BC=7"
+      },
+      {
+        "task_id": 12,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 492.1033978462219,
+        "task_key": "Let $ \\triangle ABC $ be a right triangle with $ \\"
+      },
+      {
+        "task_id": 13,
+        "benchmark": "AIME2025",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 176.80679392814636,
+        "task_key": "Let $N$ denote the number of ordered triples of po"
+      },
+      {
+        "task_id": 14,
+        "benchmark": "AIME2025",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 600.839010477066,
+        "task_key": "There are exactly three positive real numbers $ k "
+      },
+      {
+        "task_id": 15,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 9.121671199798584,
+        "task_key": "The equation ΔH = ΔU + PΔV is applicable\n\nOptions:"
+      },
+      {
+        "task_id": 16,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 429.3020534515381,
+        "task_key": "Which of the following statements concerning the r"
+      },
+      {
+        "task_id": 17,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 441.9200577735901,
+        "task_key": "Use the following key to translate the given formu"
+      },
+      {
+        "task_id": 18,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 482.6701350212097,
+        "task_key": "Suppose $f(x)$ is a function that has this propert"
+      },
+      {
+        "task_id": 19,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 454.75299406051636,
+        "task_key": "Which of these statements best describes the UK Co"
+      },
+      {
+        "task_id": 20,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 20.87608504295349,
+        "task_key": "A defendant was angry at his friend for marrying t"
+      },
+      {
+        "task_id": 21,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 441.2498939037323,
+        "task_key": "Newborn infants in countries with limited access t"
+      },
+      {
+        "task_id": 22,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 18.88482403755188,
+        "task_key": "Statement 1 | If a group has an element of order 1"
+      },
+      {
+        "task_id": 23,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 465.6692478656769,
+        "task_key": "A comet of mass m impacts the earth (mass M radius"
+      },
+      {
+        "task_id": 24,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 473.06460881233215,
+        "task_key": "________, where for example one party possess more"
+      },
+      {
+        "task_id": 25,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 27.400192499160767,
+        "task_key": "Nitronyl nitroxides are stable radicals in which t"
+      },
+      {
+        "task_id": 26,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 457.73542046546936,
+        "task_key": "Which of the following statements is INCORRECT con"
+      },
+      {
+        "task_id": 27,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 13.819550037384033,
+        "task_key": "Select the best English interpretation of the give"
+      },
+      {
+        "task_id": 28,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 410.7666916847229,
+        "task_key": "John divided his souvenir hat pins into two piles."
+      },
+      {
+        "task_id": 29,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 427.3590335845947,
+        "task_key": "What is the obligation of the peaceful settlement "
+      },
+      {
+        "task_id": 30,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 414.79724860191345,
+        "task_key": "The accused made a confession to the police, but h"
+      },
+      {
+        "task_id": 31,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 470.53738260269165,
+        "task_key": "Achieving effective change in a community is usual"
+      },
+      {
+        "task_id": 32,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 433.5857529640198,
+        "task_key": "Statement 1 | Every homomorphic image of a group G"
+      },
+      {
+        "task_id": 33,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 454.80223751068115,
+        "task_key": "Some of Mars'water is frozen in the soil and the i"
+      },
+      {
+        "task_id": 34,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 9.167676448822021,
+        "task_key": "Although corporate profit maximization is not dire"
+      },
+      {
+        "task_id": 35,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 437.4798951148987,
+        "task_key": "Cobalt-60 is used in the radiation therapy of canc"
+      },
+      {
+        "task_id": 36,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 414.4500141143799,
+        "task_key": "A parsimonious model is one that\n\nOptions:\n(A) Inc"
+      },
+      {
+        "task_id": 37,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 458.2205379009247,
+        "task_key": "Construct a complete truth table for the following"
+      },
+      {
+        "task_id": 38,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 424.78961658477783,
+        "task_key": "A meteorologist reports that there is a 30% probab"
+      },
+      {
+        "task_id": 39,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 446.87470722198486,
+        "task_key": "Which one of the following statements is false?\n\nO"
+      },
+      {
+        "task_id": 40,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 10.625701427459717,
+        "task_key": "A devastating earthquake struck a foreign country."
+      },
+      {
+        "task_id": 41,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 397.35736060142517,
+        "task_key": "“Contingency management” is”:\n\nOptions:\n(A) A stra"
+      },
+      {
+        "task_id": 42,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 449.77627778053284,
+        "task_key": "Statement 1 | A ring homomorphism is one to one if"
+      },
+      {
+        "task_id": 43,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 419.8676176071167,
+        "task_key": "Most rocks on the Moon's surface are older than th"
+      },
+      {
+        "task_id": 44,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 429.88135147094727,
+        "task_key": "What does Milton Friedman believe to be the sole r"
+      },
+      {
+        "task_id": 45,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 428.34628534317017,
+        "task_key": "Which of the following is required for both parama"
+      },
+      {
+        "task_id": 46,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 434.9405257701874,
+        "task_key": "Which of the following is NOT a feature of continu"
+      },
+      {
+        "task_id": 47,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 427.19684982299805,
+        "task_key": "Identify the antecedent of the following condition"
+      },
+      {
+        "task_id": 48,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 467.37722730636597,
+        "task_key": "What is the sum of all positive integer values of "
+      },
+      {
+        "task_id": 49,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 441.5408687591553,
+        "task_key": "Which is a 'rock' under the UN Convention of the L"
+      },
+      {
+        "task_id": 50,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 449.39620423316956,
+        "task_key": "Which of the following is not a warrantless search"
+      },
+      {
+        "task_id": 51,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 434.48222279548645,
+        "task_key": "Typical clinical symptoms following infection with"
+      },
+      {
+        "task_id": 52,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 458.09041380882263,
+        "task_key": "Find the degree for the given field extension Q(sq"
+      },
+      {
+        "task_id": 53,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 457.06004571914673,
+        "task_key": "What is the second most common element in the sola"
+      },
+      {
+        "task_id": 54,
+        "benchmark": "MMLU",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 435.5377838611603,
+        "task_key": "______ regulation goes further than the ______ tha"
+      },
+      {
+        "task_id": 55,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 452.26196241378784,
+        "task_key": "The 1H spectrum of a mixture of dimethylsulphoxide"
+      },
+      {
+        "task_id": 56,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 467.48741149902344,
+        "task_key": "Which of the following features of financial asset"
+      },
+      {
+        "task_id": 57,
+        "benchmark": "MMLU",
+        "score": 1.0,
+        "success": false,
+        "latency_s": 434.6118757724762,
+        "task_key": "Which of the following propositions is an immediat"
+      },
+      {
+        "task_id": 58,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 600.0894002914429,
+        "task_key": "The equation\n\n$$\n(x-1)(x-2) \\cdots(x-2016)=(x-1)(x"
+      },
+      {
+        "task_id": 59,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 100.49350428581238,
+        "task_key": "Determine the largest real number $a$ such that fo"
+      },
+      {
+        "task_id": 60,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 498.4923837184906,
+        "task_key": "Find all positive integers $n$ for which all posit"
+      },
+      {
+        "task_id": 61,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 544.0644779205322,
+        "task_key": "Let $n$ be a positive integer. Determine the small"
+      },
+      {
+        "task_id": 62,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 203.76065301895142,
+        "task_key": "Define $P(n)=n^{2}+n+1$. For any positive integers"
+      },
+      {
+        "task_id": 63,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 539.2377276420593,
+        "task_key": "Denote by $\\mathbb{N}$ the set of all positive int"
+      },
+      {
+        "task_id": 64,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 556.673068523407,
+        "task_key": "Let $n$ be a positive integer, and set $N=2^{n}$. "
+      },
+      {
+        "task_id": 65,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 244.84797382354736,
+        "task_key": "Let $\\mathcal{A}$ denote the set of all polynomial"
+      },
+      {
+        "task_id": 66,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 314.71060967445374,
+        "task_key": "Suppose that $a, b, c, d$ are positive real number"
+      },
+      {
+        "task_id": 67,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 567.0104615688324,
+        "task_key": "Let $\\mathbb{R}^{+}$be the set of positive real nu"
+      },
+      {
+        "task_id": 68,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 537.96457862854,
+        "task_key": "Let $n$ be an integer with $n \\geqslant 2$. On a s"
+      },
+      {
+        "task_id": 69,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 533.0900514125824,
+        "task_key": "The Fibonacci numbers $F_{0}, F_{1}, F_{2}, \\ldots"
+      },
+      {
+        "task_id": 70,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 522.3595259189606,
+        "task_key": "Players $A$ and $B$ play a game on a blackboard th"
+      },
+      {
+        "task_id": 71,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 519.5985341072083,
+        "task_key": "Let $n$ be a positive integer. Harry has $n$ coins"
+      },
+      {
+        "task_id": 72,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 296.64072465896606,
+        "task_key": "On a flat plane in Camelot, King Arthur builds a l"
+      },
+      {
+        "task_id": 73,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 119.79709935188293,
+        "task_key": "There are 60 empty boxes $B_{1}, \\ldots, B_{60}$ i"
+      },
+      {
+        "task_id": 74,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 517.3257741928101,
+        "task_key": "For any two different real numbers $x$ and $y$, we"
+      },
+      {
+        "task_id": 75,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 452.1768751144409,
+        "task_key": "Determine all functions $f: \\mathbb{Z} \\rightarrow"
+      },
+      {
+        "task_id": 76,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 120.27623701095581,
+        "task_key": "Let $n$ be a fixed positive integer. Find the maxi"
+      },
+      {
+        "task_id": 77,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 424.9581320285797,
+        "task_key": "Find all functions $f: \\mathbb{R} \\rightarrow \\mat"
+      },
+      {
+        "task_id": 78,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 474.3163387775421,
+        "task_key": "For a finite set $A$ of positive integers, we call"
+      },
+      {
+        "task_id": 79,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 501.22606897354126,
+        "task_key": "Let $A B C$ be an acute triangle, and let $M$ be t"
+      },
+      {
+        "task_id": 80,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 73.41739892959595,
+        "task_key": "Let $\\mathbb{Z}_{>0}$ denote the set of positive i"
+      },
+      {
+        "task_id": 81,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 421.9861783981323,
+        "task_key": "For a sequence $x_{1}, x_{2}, \\ldots, x_{n}$ of re"
+      },
+      {
+        "task_id": 82,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 439.42861700057983,
+        "task_key": "Determine all functions $f: \\mathbb{Z} \\rightarrow"
+      },
+      {
+        "task_id": 83,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 414.06376457214355,
+        "task_key": "Let $n \\geqslant 2$ be an integer. Consider an $n "
+      },
+      {
+        "task_id": 84,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 452.5399453639984,
+        "task_key": "We are given an infinite deck of cards, each with "
+      },
+      {
+        "task_id": 85,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 456.47121572494507,
+        "task_key": "Let $n \\geqslant 2$ be an integer, and let $A_{n}$"
+      },
+      {
+        "task_id": 86,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 65.59400153160095,
+        "task_key": "Let $k \\geqslant 2$ be an integer. Find the smalle"
+      },
+      {
+        "task_id": 87,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 449.875102519989,
+        "task_key": "Let $\\mathbb{R}_{>0}$ be the set of positive real "
+      },
+      {
+        "task_id": 88,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 446.9041368961334,
+        "task_key": "Find all positive integers $n \\geqslant 2$ for whi"
+      },
+      {
+        "task_id": 89,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 490.2534818649292,
+        "task_key": "$A \\pm 1 \\text{-}sequence$ is a sequence of 2022 n"
+      },
+      {
+        "task_id": 90,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 446.03256249427795,
+        "task_key": "In each square of a garden shaped like a $2022 \\ti"
+      },
+      {
+        "task_id": 91,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 426.457802772522,
+        "task_key": "Lucy starts by writing $s$ integer-valued 2022-tup"
+      },
+      {
+        "task_id": 92,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 460.38673853874207,
+        "task_key": "Alice fills the fields of an $n \\times n$ board wi"
+      },
+      {
+        "task_id": 93,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 456.51233100891113,
+        "task_key": "Let $\\mathbb{Z}_{\\geqslant 0}$ be the set of non-n"
+      },
+      {
+        "task_id": 94,
+        "benchmark": "OlympiadBench",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 225.68883895874023,
+        "task_key": "A number is called Norwegian if it has three disti"
+      },
+      {
+        "task_id": 95,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 35.170387506484985,
+        "task_key": "Find all positive integers $n>2$ such that\n\n$$\nn !"
+      },
+      {
+        "task_id": 96,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": true,
+        "latency_s": 108.01615691184998,
+        "task_key": "Let $\\mathbb{Q}_{>0}$ denote the set of all positi"
+      },
+      {
+        "task_id": 97,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 470.5226535797119,
+        "task_key": "Let $a_{0}, a_{1}, a_{2}, \\ldots$ be a sequence of"
+      },
+      {
+        "task_id": 98,
+        "benchmark": "OlympiadBench",
+        "score": 0.0,
+        "success": false,
+        "latency_s": 430.4046926498413,
+        "task_key": "Find the maximal value of\n\n$$\nS=\\sqrt[3]{\\frac{a}{"
+      },
+      {
+        "task_id": 99,
+        "benchmark": "OlympiadBench",
+        "score": 1.0,
+        "success": true,
+        "latency_s": 53.88890027999878,
+        "task_key": "Queenie and Horst play a game on a $20 \\times 20$ "
+      }
+    ]
+  }
+}

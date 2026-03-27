@@ -14,6 +14,7 @@ from optpilot.dag.core import MASDAG
 from optpilot.dag.executor import ExecutionTrace
 
 MMLU_DATASET = "cais/mmlu"
+AIME2024_DATASET = "Maxwell-Jia/AIME_2024"
 AIME2025_DATASET = "opencompass/AIME2025"
 OLYMPIADBENCH_DATASET = "lscpku/OlympiadBench-official"
 OLYMPIADBENCH_DEFAULT_CONFIG = "maths_en_no_proof"
@@ -92,46 +93,48 @@ def load_online_benchmark_suite(
     mmlu_subjects: Sequence[str] = MMLU_DEFAULT_SUBJECTS,
     olympiad_config: str = OLYMPIADBENCH_DEFAULT_CONFIG,
 ) -> OfficialBenchmarkSuite:
-    """Load a deterministic MMLU/AIME/OlympiadBench mix for the online pipeline.
+    """Load a deterministic benchmark mix: AIME2024 + AIME2025 + OlympiadBench + MMLU.
 
-    Tries equal 1/3 split; when a benchmark has fewer examples than its share,
-    the surplus is redistributed to the others proportionally.
+    Four-way split.  AIME 2024 and 2025 are capped at 30 each (all available
+    questions).  Remaining budget is split equally between OlympiadBench and
+    MMLU, with MMLU absorbing any leftover.
     """
     if total_tasks <= 0:
         raise ValueError("total_tasks must be positive")
 
-    # Caps per benchmark (AIME is small: only 30 questions)
-    _AIME_CAP = 30
+    _AIME_CAP = 30  # each year: 15 I + 15 II
 
-    base = total_tasks // 3
-    remainder = total_tasks % 3
-    mmlu_target = base + (1 if remainder >= 1 else 0)
-    aime_target = base + (1 if remainder >= 2 else 0)
-    olympiad_target = base
+    base = total_tasks // 4
+    remainder = total_tasks % 4
 
-    # If AIME target exceeds cap, redistribute surplus
-    if aime_target > _AIME_CAP:
-        surplus = aime_target - _AIME_CAP
-        aime_target = _AIME_CAP
-        mmlu_target += (surplus + 1) // 2
-        olympiad_target += surplus // 2
+    aime24_target = min(base + (1 if remainder >= 1 else 0), _AIME_CAP)
+    aime25_target = min(base + (1 if remainder >= 2 else 0), _AIME_CAP)
+    olympiad_target = base + (1 if remainder >= 3 else 0)
+    mmlu_target = base
+
+    # Redistribute AIME surplus (when base > 30) to olympiad/mmlu
+    aime_surplus = max(0, (base + 1) - aime24_target) + max(0, (base + 1) - aime25_target)
+    if aime_surplus > 0:
+        olympiad_target += (aime_surplus + 1) // 2
+        mmlu_target += aime_surplus // 2
+
+    aime24 = load_aime2024_examples(aime24_target)
+    aime25 = load_aime_examples(aime25_target)
+    olympiad = load_olympiad_examples(olympiad_target, config_name=olympiad_config)
+    mmlu = load_mmlu_examples(mmlu_target, subjects=mmlu_subjects)
+
+    # Fill any shortfall from MMLU (largest pool)
+    loaded = [aime24, aime25, olympiad, mmlu]
+    targets = [aime24_target, aime25_target, olympiad_target, mmlu_target]
+    shortfall = sum(max(0, t - len(ex)) for t, ex in zip(targets, loaded))
+    if shortfall > 0:
+        mmlu = load_mmlu_examples(mmlu_target + shortfall, subjects=mmlu_subjects)
 
     examples: list[BenchmarkExample] = []
-    mmlu = load_mmlu_examples(mmlu_target, subjects=mmlu_subjects)
-    aime = load_aime_examples(aime_target)
-    olympiad = load_olympiad_examples(olympiad_target, config_name=olympiad_config)
-
-    # If any benchmark underflows, redistribute again
-    loaded = [("mmlu", mmlu, mmlu_target), ("aime", aime, aime_target), ("olympiad", olympiad, olympiad_target)]
-    shortfall = sum(max(0, target - len(ex)) for _, ex, target in loaded)
-    if shortfall > 0:
-        # Fill from MMLU (largest pool)
-        extra_mmlu = load_mmlu_examples(mmlu_target + shortfall, subjects=mmlu_subjects)
-        mmlu = extra_mmlu
-
-    examples.extend(mmlu)
-    examples.extend(aime)
+    examples.extend(aime24)
+    examples.extend(aime25)
     examples.extend(olympiad)
+    examples.extend(mmlu)
     examples = examples[:total_tasks]
 
     if len(examples) < total_tasks:
@@ -253,6 +256,32 @@ def load_aime_examples(
         if not made_progress:
             break
         row_index += 1
+    return examples
+
+
+def load_aime2024_examples(limit: int) -> list[BenchmarkExample]:
+    """Load AIME 2024 examples (I + II, 30 total)."""
+    if limit <= 0:
+        return []
+
+    dataset = load_dataset(AIME2024_DATASET, split="train")
+    # Sort by ID for deterministic order: 2024-I-1, 2024-I-2, ..., 2024-II-1, ...
+    rows = sorted(dataset, key=lambda r: (
+        0 if "-I-" in r["ID"] else 1,
+        int(r["ID"].rsplit("-", 1)[-1]),
+    ))
+    examples: list[BenchmarkExample] = []
+    for row in rows[:limit]:
+        examples.append(
+            BenchmarkExample(
+                benchmark_name="AIME2024",
+                task_id=f"AIME2024::{row['ID']}",
+                prompt=row["Problem"].strip(),
+                gold_answers=(str(row["Answer"]).strip(),),
+                answer_type="integer",
+                metadata={"id": row["ID"]},
+            )
+        )
     return examples
 
 

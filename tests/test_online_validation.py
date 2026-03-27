@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from optpilot.dag.core import DAGEdge, DAGNode, MASDAG
 from optpilot.library.repair_library import RepairLibrary
 from optpilot.models import (
@@ -117,6 +119,28 @@ def test_runner_uses_success_proxy_score() -> None:
     assert trace.task_success is True
     assert trace.task_score == 1.0
     assert trace.latency_s is not None
+
+
+def test_runner_persists_trace_path_when_output_dir_is_provided(tmp_path) -> None:
+    dag = MASDAG(
+        dag_id="trace_persist",
+        nodes={
+            "start": DAGNode(node_id="start", node_type="literal", prompt="begin"),
+            "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+        },
+        edges=[DAGEdge(source="start", target="FINAL")],
+        metadata={"start": ["start"]},
+    )
+    runner = OptPilotRunner(dag=dag, model="test-model")
+
+    trace = runner.run_task("solve task", output_dir=tmp_path / "task_0")
+
+    assert trace.trace_path
+    assert trace.trace_path.endswith("trace.txt")
+    assert (tmp_path / "task_0" / "trace.txt").exists()
+    metadata = json.loads((tmp_path / "task_0" / "trace.json").read_text(encoding="utf-8"))
+    assert metadata["task_key"] == "solve task"
+    assert metadata["benchmark_name"] == "MathChat"
 
 
 def test_wrap_up_combines_positive_and_negative_hints(monkeypatch, tmp_path) -> None:

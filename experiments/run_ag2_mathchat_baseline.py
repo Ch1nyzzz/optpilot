@@ -2,10 +2,11 @@
 
 Usage:
     python -m experiments.run_ag2_mathchat_baseline --model openai/gpt-oss-120b
-    python -m experiments.run_ag2_mathchat_baseline --model openai/gpt-oss-20b
+    python -m experiments.run_ag2_mathchat_baseline --model openai/gpt-oss-120b --concurrency 256
 """
 
 import argparse
+import asyncio
 import json
 import sys
 import time
@@ -39,12 +40,24 @@ def _split_suite(suite: OfficialBenchmarkSuite, n_train: int) -> tuple[list, lis
     return train_examples, test_examples
 
 
-def _run_split(name: str, suite: OfficialBenchmarkSuite, runner: OptPilotRunner, dag: MASDAG):
+async def _run_split(
+    name: str,
+    suite: OfficialBenchmarkSuite,
+    runner: OptPilotRunner,
+    dag: MASDAG,
+    concurrency: int,
+    output_base: str | Path | None = None,
+):
     """Run baseline on a split, return (traces, stats)."""
     tasks = suite.tasks()
-    print(f"\n--- {name}: {len(tasks)} tasks ---")
+    print(f"\n--- {name}: {len(tasks)} tasks (async, concurrency={concurrency}) ---")
     t0 = time.time()
-    traces = runner.run_batch(tasks, dag=dag)
+    traces = await runner.arun_batch(
+        tasks,
+        dag=dag,
+        output_base=output_base,
+        max_concurrency=concurrency,
+    )
     elapsed = time.time() - t0
 
     per_bench: dict[str, list[float]] = defaultdict(list)
@@ -58,6 +71,8 @@ def _run_split(name: str, suite: OfficialBenchmarkSuite, runner: OptPilotRunner,
             "success": trace.task_success,
             "latency_s": trace.latency_s,
             "task_key": trace.task_key,
+            "trace_path": trace.trace_path,
+            "trajectory": trace.trajectory,
         })
 
     all_scores = [t.task_score for t in traces]
@@ -89,9 +104,21 @@ def _run_split(name: str, suite: OfficialBenchmarkSuite, runner: OptPilotRunner,
     return traces, stats
 
 
-def run_baseline(n_train: int = 100, n_test: int = 100, model: str = "MiniMaxAI/MiniMax-M2.5"):
+async def run_baseline(
+    n_train: int = 100,
+    n_test: int = 100,
+    model: str = "MiniMaxAI/MiniMax-M2.5",
+    concurrency: int = 256,
+    timeout: int = 600,
+):
     total = n_train + n_test
     model_short = model.split("/")[-1]
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    result_stem = f"baseline_{model_short}_{total}tasks_{ts}"
+    artifact_dir = RESULTS_DIR / f"{result_stem}_artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    dag_versions_dir = artifact_dir / "dag_versions"
+    dag_versions_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading benchmarks...")
     full_suite = load_online_benchmark_suite(total)
@@ -101,43 +128,56 @@ def run_baseline(n_train: int = 100, n_test: int = 100, model: str = "MiniMaxAI/
 
     dag_file = DAG_DIR / DAG_FILE
     dag = MASDAG.load(dag_file)
+    dag.save(dag_versions_dir / "baseline_input.yaml")
+    dag.save(dag_versions_dir / "baseline_final.yaml")
 
     train_runner = OptPilotRunner(
         dag=dag, model=model,
         benchmark_name="AG2_MathChat",
         score_fn=train_suite.score_task,
         benchmark_name_resolver=train_suite.benchmark_name_for_task,
+        timeout=timeout,
     )
     test_runner = OptPilotRunner(
         dag=dag, model=model,
         benchmark_name="AG2_MathChat",
         score_fn=test_suite.score_task,
         benchmark_name_resolver=test_suite.benchmark_name_for_task,
+        timeout=timeout,
     )
 
     print("=" * 65)
     print(f"  AG2 MathChat Baseline — {model_short}")
     print("=" * 65)
-    print(f"  Model:    {model}")
-    print(f"  DAG:      {dag.dag_id}  ({dag_file.name})")
-    print(f"  Agents:   {', '.join(dag.agent_nodes.keys())}")
-    print(f"  Train:    {len(train_examples)} tasks  {dict(train_suite.benchmark_counts())}")
-    print(f"  Test:     {len(test_examples)} tasks  {dict(test_suite.benchmark_counts())}")
+    print(f"  Model:       {model}")
+    print(f"  DAG:         {dag.dag_id}  ({dag_file.name})")
+    print(f"  Agents:      {', '.join(dag.agent_nodes.keys())}")
+    print(f"  Concurrency: {concurrency}")
+    print(f"  Timeout:     {timeout}s/task")
+    print(f"  Train:       {len(train_examples)} tasks  {dict(train_suite.benchmark_counts())}")
+    print(f"  Test:        {len(test_examples)} tasks  {dict(test_suite.benchmark_counts())}")
     print("=" * 65)
 
-    train_traces, train_stats = _run_split("TRAIN", train_suite, train_runner, dag)
-    test_traces, test_stats = _run_split("TEST", test_suite, test_runner, dag)
+    train_traces, train_stats = await _run_split(
+        "TRAIN", train_suite, train_runner, dag, concurrency, output_base=artifact_dir / "train"
+    )
+    test_traces, test_stats = await _run_split(
+        "TEST", test_suite, test_runner, dag, concurrency, output_base=artifact_dir / "test"
+    )
 
     # Save
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    result_path = RESULTS_DIR / f"baseline_{model_short}_{total}tasks_{ts}.json"
+    result_path = RESULTS_DIR / f"{result_stem}.json"
 
     output = {
         "experiment": "ag2_mathchat_baseline",
         "model": model,
         "dag": dag.dag_id,
         "timestamp": ts,
+        "artifacts_dir": str(artifact_dir),
+        "dag_versions_dir": str(dag_versions_dir),
+        "concurrency": concurrency,
+        "timeout_s": timeout,
         "train": train_stats,
         "test": test_stats,
     }
@@ -158,5 +198,13 @@ if __name__ == "__main__":
     parser.add_argument("--train", type=int, default=100)
     parser.add_argument("--test", type=int, default=100)
     parser.add_argument("--model", default="MiniMaxAI/MiniMax-M2.5", help="Model ID on Together AI")
+    parser.add_argument("--concurrency", type=int, default=256, help="Max concurrent tasks")
+    parser.add_argument("--timeout", type=int, default=600, help="Timeout per task in seconds")
     args = parser.parse_args()
-    run_baseline(n_train=args.train, n_test=args.test, model=args.model)
+    asyncio.run(run_baseline(
+        n_train=args.train,
+        n_test=args.test,
+        model=args.model,
+        concurrency=args.concurrency,
+        timeout=args.timeout,
+    ))

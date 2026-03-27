@@ -42,7 +42,7 @@ nodes:
     config:
       params:
         temperature: 0.3
-        max_tokens: 4096
+        max_tokens: 16384
 
   - id: Agent_Code_Executor
     type: agent
@@ -65,7 +65,7 @@ nodes:
     config:
       params:
         temperature: 0.3
-        max_tokens: 4096
+        max_tokens: 16384
 
   - id: Agent_Verifier
     type: agent
@@ -81,7 +81,7 @@ nodes:
     config:
       params:
         temperature: 0.2
-        max_tokens: 2048
+        max_tokens: 16384
 
   # === Control ===
   - id: Turn Counter

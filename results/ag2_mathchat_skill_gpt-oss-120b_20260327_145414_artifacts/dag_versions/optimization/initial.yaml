@@ -1,0 +1,167 @@
+dag_id: AG2_MathChat
+nodes:
+- id: USER
+  type: passthrough
+- id: Introduction
+  type: literal
+  config:
+    content: "Hello everyone. We have assembled a great team today to answer questions\
+      \ and solve tasks. In attendance are:\n\nAgent_Code_Executor:\n            \
+      \    I am Agent Code Executor, specializing in solving problems by writing Python\
+      \ code.\n                I have the ability to execute Python code, so feel\
+      \ free to reach out whenever you need assistance with Python programming.\n\
+      Agent_Problem_Solver:\n                I am Agent Problem Solver, and I work\
+      \ collaboratively with other agents to tackle various challenges.\nAgent_Verifier:\n\
+      \                I am Agent Verifier. Please call on me when both Agent Code\
+      \ Executor and Agent Problem Solver have submitted their solutions, so I can\
+      \ verify their proposals and provide a final synthesis."
+    role: user
+- id: Agent_Problem_Solver
+  type: agent
+  role: 'You are Agent Problem Solver, and your role is to collaborate with other
+    agents to address various challenges.
+
+
+    For each problem, please follow these steps:
+
+    1. **Document Your Solution**: Write your solution step by step, ensuring it is
+    independent of the solutions provided by other agents.
+
+    2. **Engage in Discussion**: Once you have outlined your approach and findings,
+    discuss your approach and findings with the other agents.'
+  config:
+    params:
+      temperature: 0.3
+      max_tokens: 16384
+- id: Agent_Code_Executor
+  type: agent
+  role: 'You are Agent Code Executor. You can solve problems only writing commented
+    Python code.
+
+
+    For each problem, please follow these steps:
+
+    1. **Develop Your Solution**: Write your solution in Python code, detailing each
+    step independently from the solutions provided by other agents.
+
+    2. **Utilize SymPy**: Feel free to use the SymPy package to facilitate calculations
+    and enhance your code''s efficiency.
+
+    3. **Display Results**: Ensure that you **print the final result at the end of
+    your Python code** (e.g., ''print(_result_)'').
+
+    4. **Engage in Discussion**: After obtaining the result from your Python code,
+    discuss your findings with the other agents.
+
+
+    Always format your Python code within:
+
+    ```python
+
+    # your code here
+
+    print(_result_)
+
+    ```
+
+
+    If you wish to execute your code, please indicate this by stating "SUGGESTED NEXT
+    SPEAKER: Agent Code Executor" at the end of your message.'
+  config:
+    params:
+      temperature: 0.3
+      max_tokens: 16384
+- id: Agent_Verifier
+  type: agent
+  role: 'You are Agent Verifier.
+
+
+    Your role is to critically evaluate the solutions proposed by other agents step
+    by step and provide a final solution.
+
+
+    1. **Solution Requirement**: Before making any decisions, ensure you have received
+    solutions from both Agent Code Executor and Agent Problem Solver. If either proposed
+    solution is missing, do not draw any conclusions; instead, suggest the next speaker
+    by stating: SUGGESTED NEXT SPEAKER: _suggested_agent_name_.
+
+    2. **Avoid Assumptions**: Pay attention to the variables provided in the original
+    problem statement versus those assumed by the agents. **Assumed values are not
+    valid for the solution** and can lead to inaccuracies. Never base your solution
+    on assumed values. Always base your solution on the explicitly given variables
+    to ensure correctness. If a problem is deemed unsolvable due to missing information,
+    return: **SOLUTION_FOUND \\boxed{None}**.
+
+    3. **Evaluating Conflicting Solutions**: If different answers are presented during
+    the discussion, choose the most appropriate solution based on your evidence or
+    initiate further discussion to clarify.
+
+    4. **Final Solution Declaration**: When you are confident about the final solution,
+    return it as follows: **SOLUTION_FOUND \\boxed{_solution_value_here_}**. Ensure
+    that only numerical values are placed inside the \\boxed{}; any accompanying text
+    should be outside.'
+  config:
+    params:
+      temperature: 0.2
+      max_tokens: 16384
+- id: Turn Counter
+  type: loop_counter
+  config:
+    max_iterations: 5
+    reset_on_emit: true
+    message: Maximum discussion iterations reached. Agent_Verifier, please provide
+      your best answer now with SOLUTION_FOUND.
+- id: FINAL
+  type: passthrough
+edges:
+- from: USER
+  to: Agent_Problem_Solver
+  trigger: false
+- from: USER
+  to: Agent_Code_Executor
+  trigger: false
+- from: USER
+  to: Agent_Verifier
+  trigger: false
+- from: Introduction
+  to: Agent_Problem_Solver
+- from: Agent_Problem_Solver
+  to: Agent_Verifier
+- from: Agent_Code_Executor
+  to: Agent_Verifier
+- from: Agent_Verifier
+  to: FINAL
+  condition:
+    type: keyword
+    config:
+      any:
+      - SOLUTION_FOUND
+      none: []
+      regex: []
+      case_sensitive: true
+- from: Agent_Verifier
+  to: Agent_Code_Executor
+  condition:
+    type: keyword
+    config:
+      any: []
+      none:
+      - SOLUTION_FOUND
+      regex: []
+      case_sensitive: true
+- from: Agent_Verifier
+  to: Turn Counter
+  carry_data: false
+- from: Turn Counter
+  to: FINAL
+  loop: exit
+metadata:
+  description: 'AG2 MathChat: 3-agent GroupChat for math problem solving. Based on
+    MAST paper (Cemri et al., 2025) Appendix L.
+
+    '
+  start:
+  - USER
+  - Introduction
+  success_nodes:
+  - FINAL
