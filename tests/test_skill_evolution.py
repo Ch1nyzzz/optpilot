@@ -128,8 +128,8 @@ async def test_generic_skill_persists_tool_trace(monkeypatch, tmp_path):
     async def fake_acall_llm_with_tools(*, messages, tools, tool_executor, max_tokens, max_turns):
         tool_executor("bash", {"command": "cat \"$DAG_FILE\""})
         tool_executor("search_and_replace", {
-            "old_str": "prompt: begin",
-            "new_str": "prompt: repaired",
+            "old_str": "\"prompt\": 'begin'",
+            "new_str": "\"prompt\": 'repaired'",
         })
         return [
             *messages,
@@ -167,3 +167,58 @@ async def test_generic_skill_persists_tool_trace(monkeypatch, tmp_path):
     assert payload["fm_group"] == "B"
     assert payload["messages"][-1]["content"] == "updated the DAG prompt"
     assert payload["change_records"][0]["source"] == "search_and_replace"
+
+
+@pytest.mark.anyio
+async def test_generic_skill_rejects_missing_final_assistant_summary(monkeypatch, tmp_path):
+    class _TraceSkill(GenericSkill):
+        FM_GROUP = "B"
+
+    async def fake_acall_llm_with_tools(*, messages, tools, tool_executor, max_tokens, max_turns):
+        tool_executor("search_and_replace", {
+            "old_str": "\"prompt\": 'begin'",
+            "new_str": "\"prompt\": 'repaired'",
+        })
+        return [
+            *messages,
+            {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "search_and_replace", "arguments": "{}"},
+                }],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "OK. Replaced 1 occurrence.",
+            },
+        ]
+
+    monkeypatch.setattr("optpilot.skills.base.acall_llm_with_tools", fake_acall_llm_with_tools)
+    monkeypatch.setattr("optpilot.skills.base._SKILL_AGENT_TRACE_ROOT", tmp_path / "skill_agent_traces")
+
+    dag = MASDAG(
+        dag_id="trace",
+        nodes={
+            "start": DAGNode(node_id="start", node_type="literal", prompt="begin"),
+            "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+        },
+        edges=[DAGEdge(source="start", target="FINAL")],
+        metadata={"start": ["start"]},
+    )
+    analysis = AnalysisResult(
+        fm_id="B",
+        fm_rate=1.0,
+        common_agents=["Agent_Verifier"],
+        common_steps=["verification"],
+        root_cause_clusters=["prompt issue"],
+        metadata={"proposal_traces": [], "dag_components": ["node_config"]},
+    )
+
+    result = await _TraceSkill().aevolve(dag, analysis, negatives=[], history=[])
+
+    assert result.metadata["final_assistant_summary_valid"] is False
+    assert "Tool loop ended after a tool result" in result.metadata["invalid_evolve_reason"]
+    assert result.change_records

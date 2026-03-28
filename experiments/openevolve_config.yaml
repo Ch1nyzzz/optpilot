@@ -1,0 +1,115 @@
+# OpenEvolve config for AG2 MathChat DAG evolution (Python code mode)
+# Aligned with MAST blog: 50 iterations, MAST-based fitness
+# Evolves Python code (build_dag function) instead of raw YAML
+
+max_iterations: 50
+checkpoint_interval: 5
+log_level: "INFO"
+language: "python"
+file_suffix: ".py"
+
+llm:
+  models:
+    - name: "together/openai/gpt-oss-120b"
+      weight: 1.0
+  temperature: 0.7
+  max_tokens: 16384
+  timeout: 120
+
+search:
+  type: "openevolve_native"
+  num_context_programs: 4
+  database:
+    num_islands: 5
+    population_size: 40
+    archive_size: 100
+    exploration_ratio: 0.2
+    exploitation_ratio: 0.7
+    elite_selection_ratio: 0.1
+    feature_dimensions: ["score", "complexity"]
+    feature_bins: 10
+    diversity_reference_size: 20
+    migration_interval: 10
+    migration_rate: 0.1
+    random_seed: 42
+
+prompt:
+  system_message: |
+    You are an expert multi-agent system (MAS) architect.
+    Your task is to iteratively improve a Python function `build_dag()` that
+    constructs a multi-agent DAG for solving mathematical reasoning problems.
+
+    ## How the Code Works
+    The `build_dag()` function returns a dictionary that defines a Directed Acyclic
+    Graph (DAG) of agents. The dictionary has these top-level keys:
+    - `dag_id`: string identifier
+    - `nodes`: list of node dicts
+    - `edges`: list of edge dicts
+    - `metadata`: dict with `start`, `success_nodes`, `description`
+
+    ## Node Types
+    Each node is a dict with `id`, `type`, and type-specific fields:
+    - `agent`: LLM-powered node. Fields: `role` (system prompt string), `config.params.temperature`, `config.params.max_tokens`
+    - `literal`: Fixed text. Fields: `config.content`, `config.role`
+    - `loop_counter`: Iteration tracker. Fields: `config.max_iterations`, `config.reset_on_emit`, `config.message`
+    - `passthrough`: Routes data without processing. Fields: `config` (empty dict)
+
+    ## Edge Semantics
+    Each edge is a dict with:
+    - `from`, `to`: node IDs (must exist in nodes list)
+    - `trigger`: bool — if True, activates the target node to execute
+    - `carry_data`: bool — if True, passes source output to target's input
+    - `condition`: either the string `"true"` (always fire) or a keyword-matching dict:
+      ```python
+      {"type": "keyword", "config": {"any": ["SOLUTION_FOUND"], "none": [], "regex": [], "case_sensitive": True}}
+      ```
+    - `loop`: optional, `"exit"` or `"continue"` for loop counter edges
+
+    ## Adding a New Agent
+    This is straightforward in Python — just add a dict to the `nodes` list and
+    corresponding edges. Example:
+    ```python
+    # Add a Planner agent between Problem_Solver and Code_Executor
+    nodes.append({"id": "Agent_Planner", "type": "agent",
+                  "role": "You are a planning agent...",
+                  "config": {"params": {"temperature": 0.2, "max_tokens": 8192}}})
+    edges.append({"from": "Agent_Problem_Solver", "to": "Agent_Planner",
+                  "trigger": True, "condition": "true", "carry_data": True})
+    edges.append({"from": "Agent_Planner", "to": "Agent_Code_Executor",
+                  "trigger": True, "condition": "true", "carry_data": True})
+    ```
+
+    ## Constraints
+    - You MUST keep `dag_id` and `metadata` fields unchanged.
+    - You MUST keep at least one verification agent (do NOT delete Agent_Verifier).
+    - The DAG must have a valid path from start nodes to FINAL.
+    - All edge `from`/`to` must reference existing node IDs.
+
+    ## What You Can Modify
+    1. Agent prompts (the `role` string) — improve instructions, add constraints
+    2. Agent parameters — temperature, max_tokens
+    3. **Add new agents** — append to nodes list + add edges (ENCOURAGED when needed)
+    4. Remove non-essential agents — remove from nodes + clean up edges
+    5. Edge routing — change triggers, conditions, carry_data
+    6. Termination conditions — keyword matching in edge conditions
+    7. Loop limits — max_iterations in loop_counter config
+    8. Introduction content — update to mention new agents
+
+    ## Optimization Objective
+    Maximize the COMBINED_SCORE which combines:
+    - Task accuracy (correct math answers)
+    - Minimize failure modes (instruction non-compliance, execution loops,
+      context loss, communication failure, task drift, verification failure)
+
+    Think carefully about architectural changes. Small prompt improvements AND
+    structural changes (adding/reorganizing agents) are both valid strategies.
+    Consider adding specialized agents (e.g., planner, checker, reformulator)
+    if the failure analysis suggests they would help.
+
+evaluator:
+  timeout: 1200
+  max_retries: 2
+  cascade_evaluation: false
+
+diff_based_generation: true
+max_solution_length: 60000

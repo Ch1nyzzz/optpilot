@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,46 @@ class MASDAG:
         if self.metadata:
             result["metadata"] = self.metadata
         return result
+
+    def canonical_dict(self) -> dict[str, Any]:
+        """Serialize to a canonical dict for semantic equality checks.
+
+        Canonicalization intentionally omits schema-default fields via ``to_dict()``
+        and normalizes ordering so semantically equivalent DAGs compare equal even if
+        their YAML text differs.
+        """
+
+        def _canon(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {k: _canon(value[k]) for k in sorted(value)}
+            if isinstance(value, list):
+                return [_canon(v) for v in value]
+            return value
+
+        data = self.to_dict()
+        nodes = [_canon(node) for node in data.get("nodes", [])]
+        edges = [_canon(edge) for edge in data.get("edges", [])]
+
+        nodes.sort(key=lambda node: (
+            str(node.get("id", "")),
+            str(node.get("type", "")),
+            json.dumps(node, ensure_ascii=False, sort_keys=True),
+        ))
+        edges.sort(key=lambda edge: (
+            str(edge.get("from", "")),
+            str(edge.get("to", "")),
+            json.dumps(edge.get("condition", "true"), ensure_ascii=False, sort_keys=True),
+            json.dumps(edge, ensure_ascii=False, sort_keys=True),
+        ))
+
+        canonical = {
+            "dag_id": data.get("dag_id", ""),
+            "nodes": nodes,
+            "edges": edges,
+        }
+        if "metadata" in data:
+            canonical["metadata"] = _canon(data["metadata"])
+        return canonical
 
     @classmethod
     def from_dict(cls, data: dict) -> MASDAG:

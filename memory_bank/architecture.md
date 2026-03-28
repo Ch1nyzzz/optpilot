@@ -15,12 +15,16 @@ optpilot/
 │   ├── tracking.py            # Experiment tracking (W&B integration)
 │   ├── skills/                # Skill Workflows (one per FM group)
 │   │   ├── base.py            # BaseSkill ABC + GenericSkill + run() template
+│   │   ├── tools.py           # ToolContext, search_and_replace/bash tools,
+│   │   │                      #   dag_to_python(), python_source_to_dag()
+│   │   ├── forger.py          # Merge changes from multiple Skills (Python source replay)
+│   │   ├── subskills.py       # SubSkill persistence (successful repair patterns)
 │   │   ├── registry.py        # FM group → Skill class mapping + dynamic loading
 │   │   ├── negatives.py       # ReflectInsight persistence (JSON per FM group)
 │   │   ├── evolution.py       # Skill meta-evolution (LLM modifies Skill code)
 │   │   └── skill_{a-f}.py     # 6 concrete skills (A-F)
 │   ├── dag/                   # DAG abstraction and execution
-│   │   ├── core.py            # MASDAG, DAGNode, DAGEdge + YAML serialization
+│   │   ├── core.py            # MASDAG, DAGNode, DAGEdge + YAML/Python serialization
 │   │   └── executor.py        # DAGExecutor: lightweight BFS workflow engine
 │   ├── modules/               # Core modules
 │   │   ├── base_runner.py     # MASRunner abstract base
@@ -100,7 +104,7 @@ Loop counter 约定：
 for outer_round in range(MAX_OUTER_ROUNDS=3):
     analyze(dag, traces, profiles, negatives) → AnalysisResult
     for inner_iter in range(MAX_INNER_ITERS=5):
-        evolve(dag, analysis, negatives, history) → EvolveResult (YAML-level)
+        evolve(dag, analysis, negatives, history) → EvolveResult (Python code-level)
         run_batch(proposal_tasks) → new_traces
         diagnose → fm_rate
         if fm_rate < 0.2 or no_improvement: break
@@ -155,6 +159,9 @@ warm-start 和常规优化都应把 diagnose 结果持久化，方便后续直�
 - `optimization/round_k/diagnose/fm_groups/<FM>.json`: 按 FM 分组后的 trace 清单
 - `optimization/round_k/diagnose/skill_jobs/<FM>.json`: proposal/validation split 结果，供 skill repair 直接消费
 - 若是从旧 train traces warm-start，还会写 `optimization/round_k/reused_train_manifest.json` 指向原始 trace 路径
+- 在线实验入口支持两种复用方式：
+  - `--reuse-traces-dir`: 复用 train traces，但重新执行 diagnose
+  - `--reuse-diagnose-dir`: 直接复用 `diagnose/` 目录中的 `profiles.json` + `skill_jobs/*.json`，跳过 re-diagnose，直接 dispatch skills
 
 ### Persistent Tool Traces
 

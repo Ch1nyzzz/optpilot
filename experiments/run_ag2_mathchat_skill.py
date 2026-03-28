@@ -118,6 +118,7 @@ async def run(
     concurrency: int = 512,
     timeout: int = 600,
     reuse_traces_dir: str | None = None,
+    reuse_diagnose_dir: str | None = None,
     clear_negatives: bool = False,
 ):
     total = n_train + n_test
@@ -183,12 +184,25 @@ async def run(
     print(f"  Rounds:      {max_rounds}")
     if target_group:
         print(f"  Target FM:   Group-{target_group}")
+    if reuse_diagnose_dir:
+        print(f"  Reuse Diagnose: {reuse_diagnose_dir}")
+    elif reuse_traces_dir:
+        print(f"  Reuse Traces:   {reuse_traces_dir}")
     print("=" * 65)
     print()
 
     # Run optimization on train set
     train_tasks = train_suite.tasks()
-    if reuse_traces_dir:
+    if reuse_diagnose_dir:
+        summary = await orchestrator.aoptimize_from_diagnose(
+            tasks=train_tasks,
+            diagnose_dir=reuse_diagnose_dir,
+            target_fm=target_group,
+            budget=SkillBudget(max_llm_calls=100, max_batch_runs=100, max_wall_time_s=3600),
+            concurrency=concurrency,
+            dag_output_base=dag_versions_dir / "optimization",
+        )
+    elif reuse_traces_dir:
         summary = await orchestrator.aoptimize_from_traces(
             tasks=train_tasks,
             trace_base=reuse_traces_dir,
@@ -249,6 +263,7 @@ async def run(
         "concurrency": concurrency,
         "timeout_s": timeout,
         "reuse_traces_dir": reuse_traces_dir,
+        "reuse_diagnose_dir": reuse_diagnose_dir,
         "clear_negatives": clear_negatives,
         "optimization": summary,
         "test_baseline": baseline_test_stats,
@@ -285,9 +300,13 @@ if __name__ == "__main__":
     parser.add_argument("--concurrency", type=int, default=512, help="Max concurrent tasks")
     parser.add_argument("--timeout", type=int, default=600, help="Timeout per task in seconds")
     parser.add_argument("--reuse-traces-dir", default=None, help="Reuse persisted train traces instead of rerunning train")
+    parser.add_argument("--reuse-diagnose-dir", default=None, help="Reuse persisted diagnose artifacts instead of rerunning train/diagnose")
     parser.add_argument("--clear-negatives", action="store_true", help="Delete persisted negatives before optimization")
     parser.add_argument("--wandb", action="store_true", help="Enable W&B tracking")
     args = parser.parse_args()
+
+    if args.reuse_traces_dir and args.reuse_diagnose_dir:
+        parser.error("--reuse-traces-dir and --reuse-diagnose-dir are mutually exclusive")
 
     asyncio.run(run(
         dag_path=args.dag,
@@ -300,5 +319,6 @@ if __name__ == "__main__":
         concurrency=args.concurrency,
         timeout=args.timeout,
         reuse_traces_dir=args.reuse_traces_dir,
+        reuse_diagnose_dir=args.reuse_diagnose_dir,
         clear_negatives=args.clear_negatives,
     ))

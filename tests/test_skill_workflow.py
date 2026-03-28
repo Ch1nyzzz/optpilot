@@ -35,7 +35,7 @@ class _MetricSkill(BaseSkill):
         return EvolveResult(
             dag=dag,
             analysis_text="analysis",
-            modified_yaml="yaml",
+            modified_source="source",
             change_description="change",
         )
 
@@ -89,7 +89,7 @@ class _SkillUnderTest(BaseSkill):
         return EvolveResult(
             dag="repaired-dag",
             analysis_text="analysis",
-            modified_yaml="yaml",
+            modified_source="source",
             change_description="change",
         )
 
@@ -224,7 +224,7 @@ def test_run_rejects_noop_success_and_records_negative():
             return EvolveResult(
                 dag=dag,
                 analysis_text="analysis",
-                modified_yaml=self.read_yaml(dag),
+                modified_source=self.read_source(dag),
                 change_description="",
             )
 
@@ -243,6 +243,110 @@ def test_run_rejects_noop_success_and_records_negative():
     assert result.success is False
     assert len(result.negatives) == 1
     assert "No concrete DAG change" in result.negatives[0].failure_reason
+
+
+def test_run_rejects_semantic_noop_that_only_writes_default_values():
+    dag = MASDAG(
+        dag_id="noop-default",
+        nodes={
+            "start": DAGNode(node_id="start", node_type="literal", prompt="begin"),
+            "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+        },
+        edges=[DAGEdge(source="start", target="FINAL")],
+        metadata={"start": ["start"]},
+    )
+
+    class _SemanticNoOpSkill(_MetricSkill):
+        MAX_INNER_ITERS = 1
+        MAX_OUTER_ROUNDS = 1
+
+        def evolve(self, dag, analysis, negatives, history):
+            source = self.read_source(dag)
+            # Make a superficial text change that doesn't alter the DAG semantically
+            modified_source = source.replace(
+                '"from": \'start\', "to": \'FINAL\'',
+                '"from": \'start\', "to": \'FINAL\', "carry_data": True',
+            )
+            return EvolveResult(
+                dag=self.write_source(modified_source) if modified_source != source else dag,
+                analysis_text="made edge explicit",
+                modified_source=modified_source,
+                change_description="made edge explicit",
+                actions_taken=["add carry_data: true"],
+                change_records=[{"source": "search_and_replace"}],
+            )
+
+    skill = _SemanticNoOpSkill(fm_values=[1.0, 0.0, 1.0], pass_values=[0.0])
+    result = skill.run(
+        original_dag=dag,
+        proposal_traces=[{"trace": 1}],
+        proposal_profiles=[{"profile": 1}],
+        proposal_tasks=["proposal-task"],
+        validation_tasks=["validation-task"],
+        runner=_DummyRunner(),
+        diagnoser=_DummyDiagnoser(),
+        budget=SkillBudget(max_llm_calls=10, max_batch_runs=10),
+    )
+
+    assert result.success is False
+    assert len(result.negatives) == 1
+    assert "No concrete DAG change" in result.negatives[0].failure_reason
+
+
+def test_run_records_invalid_evolve_summary_as_failure_snapshot():
+    dag = MASDAG(
+        dag_id="invalid-summary",
+        nodes={
+            "start": DAGNode(node_id="start", node_type="literal", prompt="begin"),
+            "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+        },
+        edges=[DAGEdge(source="start", target="FINAL")],
+        metadata={"start": ["start"]},
+    )
+
+    class _InvalidSummarySkill(_MetricSkill):
+        MAX_INNER_ITERS = 1
+        MAX_OUTER_ROUNDS = 1
+
+        def evolve(self, dag, analysis, negatives, history):
+            repaired = MASDAG(
+                dag_id="invalid-summary",
+                nodes={
+                    "start": DAGNode(node_id="start", node_type="literal", prompt="changed"),
+                    "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+                },
+                edges=[DAGEdge(source="start", target="FINAL")],
+                metadata={"start": ["start"]},
+            )
+            return EvolveResult(
+                dag=repaired,
+                analysis_text="",
+                modified_source=self.read_source(repaired),
+                change_description="truncated tool loop",
+                actions_taken=["change"],
+                metadata={
+                    "invalid_evolve_reason": (
+                        "Tool loop ended with an empty assistant message instead of a final repair summary."
+                    )
+                },
+            )
+
+    skill = _InvalidSummarySkill(fm_values=[1.0], pass_values=[0.0])
+    result = skill.run(
+        original_dag=dag,
+        proposal_traces=[{"trace": 1}],
+        proposal_profiles=[{"profile": 1}],
+        proposal_tasks=["proposal-task"],
+        validation_tasks=["validation-task"],
+        runner=_DummyRunner(),
+        diagnoser=_DummyDiagnoser(),
+        budget=SkillBudget(max_llm_calls=10, max_batch_runs=10),
+    )
+
+    assert result.success is False
+    assert len(result.negatives) == 1
+    assert "empty assistant message" in result.negatives[0].failure_reason
+    assert result.budget_used.used_batch_runs == 1
 
 
 def test_run_records_budget_exhaustion_snapshot_before_validation():
@@ -273,7 +377,7 @@ def test_run_records_budget_exhaustion_snapshot_before_validation():
             return EvolveResult(
                 dag=repaired,
                 analysis_text="analysis",
-                modified_yaml=self.read_yaml(repaired),
+                modified_source=self.read_source(repaired),
                 change_description="change",
                 actions_taken=["change"],
             )
@@ -430,3 +534,98 @@ async def test_aoptimize_from_traces_reuses_persisted_traces_and_saves_diagnosis
     assert diagnose_dir.joinpath("fm_groups", "B.json").exists()
     assert diagnose_dir.joinpath("skill_jobs", "B.json").exists()
     assert (tmp_path / "artifacts" / "optimization" / "round_1" / "reused_train_manifest.json").exists()
+
+
+@pytest.mark.anyio
+async def test_aoptimize_from_diagnose_reuses_saved_jobs_without_rediagnosing(monkeypatch, tmp_path):
+    dag = MASDAG(
+        dag_id="diagnose_reuse_dag",
+        nodes={
+            "start": DAGNode(node_id="start", node_type="literal", prompt="begin"),
+            "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+        },
+        edges=[DAGEdge(source="start", target="FINAL")],
+        metadata={"start": ["start"]},
+    )
+    trace_root = tmp_path / "persisted_train"
+    diagnose_dir = tmp_path / "diagnose"
+    trace_entries = []
+    for idx in range(2):
+        task_dir = trace_root / f"task_{idx}"
+        task_dir.mkdir(parents=True)
+        trace_path = task_dir / "trace.txt"
+        trace_path.write_text(f"trace-{idx}", encoding="utf-8")
+        entry = {
+            "task_index": idx,
+            "trace_id": idx,
+            "mas_name": "diagnose_reuse_dag",
+            "llm_name": "test-model",
+            "benchmark_name": "Bench",
+            "trace_path": str(trace_path),
+            "task_key": f"task-{idx}",
+            "task_success": False,
+            "task_score": 0.0,
+            "latency_s": 1.0,
+            "active_fm_ids": ["B"],
+            "labels": {
+                "B": {
+                    "fm_name": "Execution Loop / Stuck",
+                    "category": "B",
+                    "present": True,
+                    "confidence": 1.0,
+                }
+            },
+            "localization": {},
+        }
+        trace_entries.append(entry)
+
+    diagnose_dir.mkdir(parents=True)
+    diagnose_dir.joinpath("profiles.json").write_text(json.dumps(trace_entries), encoding="utf-8")
+    diagnose_dir.joinpath("summary.json").write_text(json.dumps({
+        "n_traces": 2,
+        "fm_ranking": [{"fm_id": "B", "count": 2}],
+        "source_trace_base": str(trace_root),
+    }), encoding="utf-8")
+    skill_jobs_dir = diagnose_dir / "skill_jobs"
+    skill_jobs_dir.mkdir()
+    skill_jobs_dir.joinpath("B.json").write_text(json.dumps({
+        "fm_id": "B",
+        "proposal_idx": [0],
+        "validation_idx": [1],
+        "proposal_traces": [trace_entries[0]],
+        "validation_traces": [trace_entries[1]],
+    }), encoding="utf-8")
+
+    class _NoDiagnoser:
+        async def adiagnose_batch(self, traces):
+            raise AssertionError("diagnoser should not be called when reusing diagnose artifacts")
+
+    captured: dict[str, object] = {}
+
+    async def fake_arun_skill(self, job, dag, tasks, traces, profiles, budget, concurrency=256):
+        captured["job"] = job
+        captured["trace_paths"] = [trace.trace_path for trace in traces]
+        captured["active_fms"] = [profile.active_fm_ids() for profile in profiles]
+        return "B", SkillResult(
+            success=False,
+            fm_id="B",
+            negatives=[],
+        )
+
+    monkeypatch.setattr(Orchestrator, "_arun_skill", fake_arun_skill)
+
+    orchestrator = Orchestrator(runner=type("Runner", (), {"model": "test-model"})(), dag=dag, parallel=False)
+    orchestrator.diagnoser = _NoDiagnoser()
+
+    summary = await orchestrator.aoptimize_from_diagnose(
+        tasks=["prompt-0", "prompt-1"],
+        diagnose_dir=diagnose_dir,
+        dag_output_base=tmp_path / "artifacts" / "dag_versions",
+    )
+
+    assert summary["diagnose_source"] == str(diagnose_dir)
+    assert captured["job"]["fm_id"] == "B"
+    assert captured["job"]["proposal_idx"] == [0]
+    assert captured["job"]["validation_idx"] == [1]
+    assert captured["trace_paths"] == [str(trace_root / "task_0" / "trace.txt"), str(trace_root / "task_1" / "trace.txt")]
+    assert captured["active_fms"] == [["B"], ["B"]]

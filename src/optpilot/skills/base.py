@@ -15,9 +15,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from difflib import unified_diff
 from statistics import mean
-from typing import TYPE_CHECKING
-
-import yaml
+from typing import TYPE_CHECKING, Any
 
 from optpilot.config import (
     LIBRARY_DIR,
@@ -38,7 +36,7 @@ from optpilot.models import (
 )
 from optpilot.repair_utils import extract_fenced_block, extract_preface, summarize_faults
 from optpilot.skills.subskills import SubSkillStore
-from optpilot.skills.tools import TOOL_SCHEMAS, ChangeRecord, ToolContext, execute_tool
+from optpilot.skills.tools import TOOL_SCHEMAS, ChangeRecord, ToolContext, dag_to_python, execute_tool
 
 if TYPE_CHECKING:
     from optpilot.dag.core import MASDAG
@@ -125,6 +123,11 @@ class BaseSkill(ABC):
                 current_dag = result.dag
                 budget.used_llm_calls += 1
 
+                invalid_reason = self._invalid_evolve_result_reason(result)
+                if invalid_reason:
+                    print(f"    Invalid evolve result: {invalid_reason[:120]}")
+                    break
+
                 new_traces = runner.run_batch(proposal_tasks, dag=current_dag)
                 new_profiles = diagnoser.diagnose_batch(new_traces)
                 latest_eval_traces = new_traces
@@ -151,6 +154,34 @@ class BaseSkill(ABC):
 
             before_fm = self._fm_rate(before_val_profiles)
             before_pass = self._pass_rate(before_val_traces)
+            invalid_evolve_reason = ""
+            for er in reversed(evolve_history):
+                invalid_evolve_reason = self._invalid_evolve_result_reason(er)
+                if invalid_evolve_reason:
+                    break
+
+            if invalid_evolve_reason:
+                print(f"  [Skill-{self.FM_GROUP}] Invalid evolve termination, recording failure snapshot.")
+                insight = self._build_synthetic_insight(
+                    evolve_history=evolve_history,
+                    before_fm=before_fm,
+                    after_fm=before_fm,
+                    before_pass=before_pass,
+                    after_pass=before_pass,
+                    failure_reason=invalid_evolve_reason,
+                    lesson=(
+                        "A repair attempt is only valid if the tool loop ends with a non-empty "
+                        "assistant summary after edits and validation. Treat truncated or empty "
+                        "assistant endings as failed attempts."
+                    ),
+                )
+                insight.round_index = prior_round_index + len(new_negatives) + 1
+                negatives.append(insight)
+                new_negatives.append(insight)
+                completed_outer_rounds = outer_round + 1
+                print(f"    Lesson: {insight.lesson[:120]}")
+                continue
+
             material_change = self._has_material_change(original_dag, current_dag, evolve_history)
 
             if not material_change:
@@ -163,11 +194,11 @@ class BaseSkill(ABC):
                     after_pass=before_pass,
                     failure_reason=(
                         "No concrete DAG change was applied. The evolve loop produced no material "
-                        "YAML diff, so this round cannot count as a repair."
+                        "code diff, so this round cannot count as a repair."
                     ),
                     lesson=(
                         "A valid repair must leave a real DAG diff. Require at least one concrete "
-                        "search_and_replace or bash-written YAML change before evaluating success."
+                        "search_and_replace or bash-written code change before evaluating success."
                     ),
                 )
                 insight.round_index = prior_round_index + len(new_negatives) + 1
@@ -376,11 +407,11 @@ class BaseSkill(ABC):
                     after_pass=before_pass,
                     failure_reason=(
                         "No concrete DAG change was applied. The evolve loop produced no material "
-                        "YAML diff, so this round cannot count as a repair."
+                        "code diff, so this round cannot count as a repair."
                     ),
                     lesson=(
                         "A valid repair must leave a real DAG diff. Require at least one concrete "
-                        "search_and_replace or bash-written YAML change before evaluating success."
+                        "search_and_replace or bash-written code change before evaluating success."
                     ),
                 )
                 insight.round_index = prior_round_index + len(new_negatives) + 1
@@ -572,19 +603,18 @@ class BaseSkill(ABC):
     #  Tool methods — available to all subclasses                          #
     # ------------------------------------------------------------------ #
 
-    def read_yaml(self, dag: MASDAG) -> str:
-        """Serialize DAG to YAML string."""
-        return yaml.dump(dag.to_dict(), allow_unicode=True, sort_keys=False)
+    def read_source(self, dag: MASDAG) -> str:
+        """Serialize DAG to build_dag() Python source string."""
+        return dag_to_python(dag)
 
-    def write_yaml(self, yaml_str: str) -> MASDAG:
-        """Parse a YAML string into a MASDAG."""
-        from optpilot.dag.core import MASDAG as _MASDAG
+    def write_source(self, source: str) -> MASDAG:
+        """Parse a build_dag() Python source into a MASDAG."""
+        from optpilot.skills.tools import python_source_to_dag
 
-        parsed = yaml.safe_load(yaml_str)
-        return _MASDAG.from_dict(parsed)
+        return python_source_to_dag(source)
 
-    def diff_yaml(self, before: str, after: str) -> list[str]:
-        """Compute human-readable diff between two YAML strings."""
+    def diff_source(self, before: str, after: str) -> list[str]:
+        """Compute human-readable diff between two source strings."""
         diff_lines = list(unified_diff(
             before.splitlines(keepends=True),
             after.splitlines(keepends=True),
@@ -643,15 +673,44 @@ class BaseSkill(ABC):
         candidate_dag: MASDAG,
         evolve_history: list[EvolveResult],
     ) -> bool:
+        if hasattr(original_dag, "canonical_dict") and hasattr(candidate_dag, "canonical_dict"):
+            return original_dag.canonical_dict() != candidate_dag.canonical_dict()
         if hasattr(original_dag, "to_dict") and hasattr(candidate_dag, "to_dict"):
-            if self.read_yaml(original_dag) != self.read_yaml(candidate_dag):
-                return True
+            return original_dag.to_dict() != candidate_dag.to_dict()
         elif original_dag != candidate_dag:
             return True
         for er in evolve_history:
             if er.change_records or er.actions_taken:
                 return True
         return False
+
+    def _invalid_evolve_result_reason(self, result: EvolveResult) -> str:
+        reason = result.metadata.get("invalid_evolve_reason", "")
+        return reason.strip() if isinstance(reason, str) else ""
+
+    def _extract_final_assistant_summary(self, final_msgs: list[dict[str, Any]]) -> tuple[str, str]:
+        """Return (summary, invalid_reason)."""
+        if not final_msgs:
+            return "", "Tool loop ended without any final assistant summary."
+
+        last_msg = final_msgs[-1]
+        if last_msg.get("role") != "assistant":
+            return "", (
+                "Tool loop ended after a tool result instead of a final assistant summary. "
+                "The repair did not complete its validation-and-summary phase."
+            )
+        if last_msg.get("tool_calls"):
+            return "", (
+                "Tool loop ended while the assistant was still issuing tool calls. "
+                "The repair did not reach a final summary."
+            )
+
+        content = last_msg.get("content")
+        if not isinstance(content, str) or not content.strip():
+            return "", (
+                "Tool loop ended with an empty assistant message instead of a final repair summary."
+            )
+        return content.strip(), ""
 
     def _build_synthetic_insight(
         self,
@@ -725,15 +784,15 @@ def _build_skill_context_index(
         f"- DAG components: {dag_components}",
         "",
         "## Prepared Local Files",
-        "- $DAG_FILE: current MASDAG YAML under repair",
+        "- $DAG_FILE: current build_dag() Python source under repair",
         "- agent_context.md: this index file",
         *trace_file_lines,
         "",
         "## Repository Files To Inspect With Bash",
         f"- {_EXECUTOR_PATH}: runtime executor semantics for prompts, carry_data, loop control, and edge conditions",
-        f"- {_DAG_CORE_PATH}: MASDAG, DAGNode, DAGEdge schema and YAML parsing",
+        f"- {_DAG_CORE_PATH}: MASDAG, DAGNode, DAGEdge schema",
         f"- {_SKILL_BASE_PATH}: shared analyze/evolve/reflect workflow and prompt templates",
-        f"- {_SKILL_TOOLS_PATH}: bash/search_and_replace tool semantics and YAML sync behavior",
+        f"- {_SKILL_TOOLS_PATH}: bash/search_and_replace tool semantics and Python source sync behavior",
         f"- {_MODELS_PATH}: AnalysisResult, EvolveResult, ReflectInsight, SkillBudget",
         f"- {_ARCHITECTURE_PATH}: project-level architecture and workflow notes",
         f"- {_PROJECT_GOAL_PATH}: project mission and scope",
@@ -752,9 +811,9 @@ You are a multi-agent system (MAS) failure analyst.
 
 Analyze the following MAS for **{fm_name}** problems: {fm_description}
 
-## Current MAS Configuration (YAML)
-```yaml
-{yaml_content}
+## Current MAS Configuration (Python)
+```python
+{python_source}
 ```
 
 ## Fault Evidence from {n_traces} traces
@@ -777,12 +836,12 @@ _EVOLVE_SYSTEM_PROMPT = """\
 You are a multi-agent system (MAS) architect performing targeted repair.
 
 You have two tools:
-- **search_and_replace**: modify the MASDAG YAML by replacing exact text segments. \
+- **search_and_replace**: modify the build_dag() Python source by replacing exact text segments. \
 The old_str must match exactly including whitespace. Use multiple calls for multiple changes.
-- **bash**: run shell commands. Read files, run Python, validate YAML, explore code, etc.
+- **bash**: run shell commands. Read files, run Python, validate the DAG, explore code, etc.
 
 ## Key Files
-- `$DAG_FILE` — the current MASDAG YAML configuration you are modifying
+- `$DAG_FILE` — the current build_dag() Python source you are modifying
 - `agent_context.md` — prepared context index with diagnosis summary, trace file locations, \
 project memory, and repository file addresses
 - `{executor_path}` — the DAG executor source code. Read this to understand how nodes, \
@@ -791,19 +850,26 @@ edges, carry_data, loops, and conditions work at runtime.
 
 ## Workflow
 1. Read the prepared index: `cat agent_context.md`
-2. Read the current YAML: `cat $DAG_FILE`
+2. Read the current Python source: `cat $DAG_FILE`
 3. Inspect only the most relevant repository files and trace files with `bash`.
 4. Analyze the diagnosis and runtime evidence to identify the root cause.
 5. Apply targeted fixes with `search_and_replace`.
-6. Validate: `python3 -c "import yaml; yaml.safe_load(open('$DAG_FILE'))" && echo OK`
+6. Validate: `python3 -c "exec(open('$DAG_FILE').read()); d=build_dag(); print('OK:', len(d['nodes']), 'nodes')" && echo VALID`
 7. Summarize what you changed and why.
 
 ## Rules
 - Fix the ROOT CAUSE, not just symptoms.
 - Preserve dag_id and metadata unchanged.
 - Each search_and_replace old_str must be unique in the file.
+- Do not spend the entire tool budget only reading files. After the minimum necessary
+investigation, either apply at least one concrete code change or explicitly state why
+no safe repair can be made.
+- Leave enough turns for validation and a final summary after making edits.
 - Your repair must not degrade task accuracy — fixing a structural issue is only \
-valuable if the system still produces correct answers."""
+valuable if the system still produces correct answers.
+- The build_dag() function must return a dict parseable by MASDAG.from_dict(). \
+You may add helper variables, modify prompts, change parameters, add/remove agents, \
+or restructure routing — all through Python code modifications."""
 
 _EVOLVE_USER_PROMPT = """\
 The system suffers from **{fm_name}**: {fm_description}
@@ -835,20 +901,20 @@ Use `bash` to read them and understand the actual data flow:
 ## Failed Approaches (from prior rounds — DO NOT repeat)
 {negatives_text}
 
-Fix the diagnosed problems. Start by reading the DAG YAML and the executor source \
+Fix the diagnosed problems. Start by reading the build_dag() Python source and the executor source \
 to understand the data flow, then examine the trace files to see the actual failure."""
 
 _REFLECT_PROMPT = """\
 You are analyzing why a MAS repair attempt failed to resolve **{fm_name}** problems.
 
 ## Original MAS (before repair)
-```yaml
-{original_yaml}
+```python
+{original_python}
 ```
 
 ## Final MAS (after repair)
-```yaml
-{final_yaml}
+```python
+{final_python}
 ```
 
 ## Changes attempted in this round
@@ -882,7 +948,7 @@ class GenericSkill(BaseSkill):
         fm_info = GROUP_DEFINITIONS[self.FM_GROUP]
         prompt = _ANALYZE_PROMPT.format(
             fm_name=fm_info["name"], fm_description=fm_info["description"],
-            yaml_content=self.read_yaml(dag), n_traces=len(traces),
+            python_source=self.read_source(dag), n_traces=len(traces),
             fault_summary=summarize_faults(self.FM_GROUP, profiles, traces),
             negatives_text=self.format_negatives(negatives),
             analyze_hint=self.ANALYZE_HINT,
@@ -1008,28 +1074,33 @@ class GenericSkill(BaseSkill):
             final_msgs=final_msgs,
         )
 
-        # Extract the final assistant summary
-        analysis_text = ""
-        for msg in reversed(final_msgs):
-            if msg.get("role") == "assistant" and msg.get("content"):
-                analysis_text = msg["content"]
-                break
+        analysis_text, invalid_evolve_reason = self._extract_final_assistant_summary(final_msgs)
 
         # Build result
-        modified_yaml = ctx.yaml_content
+        modified_source = ctx.python_source
         try:
             new_dag = ctx.to_dag()
         except Exception:
             new_dag = dag  # fallback if parsing fails
 
+        change_description = analysis_text[:200] if analysis_text else ""
+        if not change_description and invalid_evolve_reason:
+            change_description = invalid_evolve_reason[:200]
+        if not change_description:
+            change_description = "; ".join(ctx.change_previews())[:200]
+
         return EvolveResult(
             dag=new_dag,
             analysis_text=analysis_text[:500],
-            modified_yaml=modified_yaml,
-            change_description=analysis_text[:200] if analysis_text else "; ".join(ctx.change_previews())[:200],
+            modified_source=modified_source,
+            change_description=change_description,
             actions_taken=ctx.change_previews()[:20],
             change_records=ctx.changes,
-            metadata={"tool_trace_path": tool_trace_path},
+            metadata={
+                "tool_trace_path": tool_trace_path,
+                "invalid_evolve_reason": invalid_evolve_reason,
+                "final_assistant_summary_valid": not bool(invalid_evolve_reason),
+            },
         )
 
     def _persist_tool_trace(
@@ -1050,7 +1121,7 @@ class GenericSkill(BaseSkill):
             "created_at": datetime.now().isoformat(),
             "fm_group": self.FM_GROUP,
             "agent_context_path": context_file,
-            "dag_file": os.path.join(ctx.tmpdir, "dag.yaml"),
+            "dag_file": os.path.join(ctx.tmpdir, "dag.py"),
             "trace_files": trace_file_lines,
             "analysis": {
                 "fm_id": analysis.fm_id,
@@ -1095,7 +1166,7 @@ class GenericSkill(BaseSkill):
                 for change in ctx.changes
             ],
             "change_previews": ctx.change_previews(),
-            "final_yaml": ctx.yaml_content,
+            "final_source": ctx.python_source,
         }
         trace_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2, default=str),
@@ -1109,8 +1180,8 @@ class GenericSkill(BaseSkill):
         after_val_traces: list[MASTrace], after_val_profiles: list[FMProfile],
     ) -> ReflectInsight:
         fm_info = GROUP_DEFINITIONS[self.FM_GROUP]
-        original_yaml = self.read_yaml(original_dag)
-        final_yaml = evolve_history[-1].modified_yaml if evolve_history else original_yaml
+        original_python = self.read_source(original_dag)
+        final_python = evolve_history[-1].modified_source if evolve_history else original_python
         changes = [er.change_description for er in evolve_history]
         before_fm = self._fm_rate(before_val_profiles)
         after_fm = self._fm_rate(after_val_profiles)
@@ -1119,7 +1190,7 @@ class GenericSkill(BaseSkill):
 
         prompt = _REFLECT_PROMPT.format(
             fm_name=fm_info["name"],
-            original_yaml=original_yaml[:3000], final_yaml=final_yaml[:3000],
+            original_python=original_python[:3000], final_python=final_python[:3000],
             changes_text="\n".join(f"- {c}" for c in changes) or "No changes recorded.",
             before_fm=before_fm, after_fm=after_fm,
             before_pass=before_pass, after_pass=after_pass,

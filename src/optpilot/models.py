@@ -146,7 +146,7 @@ class EvolveResult:
 
     dag: MASDAG
     analysis_text: str          # LLM reasoning
-    modified_yaml: str          # complete modified YAML
+    modified_source: str        # complete modified source (Python build_dag())
     change_description: str     # one-line summary
     actions_taken: list[str] = field(default_factory=list)  # human-readable diffs
     change_records: list[Any] = field(default_factory=list)  # ChangeRecord list for Forger replay

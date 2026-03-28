@@ -1,24 +1,22 @@
 """Forger — merge changes from multiple successful Skills into one DAG.
 
 Each Skill works on an independent copy of the original DAG.  The Forger
-replays all their search-and-replace operations onto the original YAML.
+replays all their search-and-replace operations onto the original Python source.
 Non-conflicting changes apply directly; conflicts are resolved by LLM.
 """
 
 from __future__ import annotations
 
-import yaml
-
 from optpilot.dag.core import MASDAG
 from optpilot.llm import acall_llm
 from optpilot.models import SkillResult
-from optpilot.skills.tools import ChangeRecord
+from optpilot.skills.tools import ChangeRecord, dag_to_python, python_source_to_dag
 
 
 _MERGE_CONFLICT_PROMPT = """\
-You are merging two independent YAML modifications that conflict.
+You are merging two independent Python code modifications that conflict.
 
-## Original YAML segment
+## Original code segment
 ```
 {original_segment}
 ```
@@ -33,7 +31,7 @@ You are merging two independent YAML modifications that conflict.
 {mod_b}
 ```
 
-Merge both modifications into a single coherent YAML segment that preserves
+Merge both modifications into a single coherent Python code segment that preserves
 the intent of both repairs.  Output ONLY the merged text (no fences, no explanation)."""
 
 
@@ -46,7 +44,7 @@ async def forge(
     Strategy:
     1. Collect all ChangeRecords from successful skills (search_and_replace only;
        bash-sourced full-file changes are applied as-is if they don't conflict).
-    2. Replay them sequentially on the original YAML.
+    2. Replay them sequentially on the original Python source.
     3. If a change's old_str can't be found (already modified by another skill),
        use LLM to merge.
 
@@ -58,8 +56,8 @@ async def forge(
     if len(successful) == 1:
         return successful[0].dag
 
-    original_yaml = yaml.dump(original_dag.to_dict(), allow_unicode=True, sort_keys=False)
-    merged_yaml = original_yaml
+    original_source = dag_to_python(original_dag)
+    merged_source = original_source
 
     # Collect all change records with their source skill
     all_changes: list[tuple[str, ChangeRecord]] = []
@@ -92,24 +90,23 @@ async def forge(
     for fm_id, cr in all_changes:
         if cr.source == "bash":
             # Full file replacement — just apply it
-            merged_yaml = cr.new_str
+            merged_source = cr.new_str
             continue
 
-        if cr.old_str in merged_yaml:
-            merged_yaml = merged_yaml.replace(cr.old_str, cr.new_str, 1)
+        if cr.old_str in merged_source:
+            merged_source = merged_source.replace(cr.old_str, cr.new_str, 1)
         else:
-            conflicts.append((fm_id, cr, merged_yaml))
+            conflicts.append((fm_id, cr, merged_source))
 
     # Resolve conflicts via LLM
     for fm_id, cr, _snapshot in conflicts:
-        merged_yaml = await _resolve_conflict(
-            merged_yaml, fm_id, cr, successful,
+        merged_source = await _resolve_conflict(
+            merged_source, fm_id, cr, successful,
         )
 
     # Parse and validate
     try:
-        parsed = yaml.safe_load(merged_yaml)
-        return MASDAG.from_dict(parsed)
+        return python_source_to_dag(merged_source)
     except Exception:
         # Fallback: return the skill with highest pass_rate
         best = max(successful, key=lambda r: r.final_pass_rate)
@@ -137,25 +134,25 @@ def _extract_change_records(result: SkillResult) -> list[ChangeRecord]:
 
 
 async def _resolve_conflict(
-    current_yaml: str,
+    current_source: str,
     fm_id: str,
     cr: ChangeRecord,
     all_results: list[SkillResult],
 ) -> str:
     """Attempt to apply a conflicting change via LLM merge."""
-    # Find a nearby segment in current_yaml that resembles old_str
+    # Find a nearby segment in current_source that resembles old_str
     # Use the first 60 chars of old_str as search anchor
     anchor = cr.old_str[:60]
-    idx = current_yaml.find(anchor[:30])
+    idx = current_source.find(anchor[:30])
     if idx == -1:
         # Can't even find a partial match — skip this change
         print(f"  Forger: skipping Skill-{fm_id} change (no anchor found)")
-        return current_yaml
+        return current_source
 
     # Extract context around the anchor
     ctx_start = max(0, idx - 100)
-    ctx_end = min(len(current_yaml), idx + len(cr.old_str) + 100)
-    original_segment = current_yaml[ctx_start:ctx_end]
+    ctx_end = min(len(current_source), idx + len(cr.old_str) + 100)
+    original_segment = current_source[ctx_start:ctx_end]
 
     prompt = _MERGE_CONFLICT_PROMPT.format(
         original_segment=original_segment,
@@ -174,8 +171,8 @@ async def _resolve_conflict(
         )
         merged_segment = merged_segment.strip()
         if merged_segment:
-            return current_yaml[:ctx_start] + merged_segment + current_yaml[ctx_end:]
+            return current_source[:ctx_start] + merged_segment + current_source[ctx_end:]
     except Exception as e:
         print(f"  Forger: LLM merge failed for Skill-{fm_id}: {e}")
 
-    return current_yaml
+    return current_source

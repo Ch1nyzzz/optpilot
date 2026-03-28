@@ -16,7 +16,7 @@ from typing import TypeVar
 from optpilot.config import LIBRARY_DIR
 from optpilot.dag.core import MASDAG
 from optpilot.data.fm_taxonomy_6group import GROUP_NAMES
-from optpilot.models import FMProfile, MASTrace, SkillBudget, SkillResult
+from optpilot.models import FMLabel, FMProfile, FMLocalization, MASTrace, SkillBudget, SkillResult
 from optpilot.modules.base_runner import MASRunner
 from optpilot.modules.diagnoser import Diagnoser
 from optpilot.skills.evolution import SkillEvolver
@@ -103,6 +103,38 @@ def _profile_to_dict(profile: FMProfile) -> dict[str, object]:
             for fm_id, loc in profile.localization.items()
         },
     }
+
+
+def _profile_from_dict(data: dict[str, object]) -> FMProfile:
+    profile = FMProfile(trace_id=int(data["trace_id"]))
+
+    labels = data.get("labels", {})
+    if isinstance(labels, dict):
+        for fm_id, raw in labels.items():
+            if not isinstance(raw, dict):
+                continue
+            profile.labels[str(fm_id)] = FMLabel(
+                fm_id=str(fm_id),
+                fm_name=str(raw.get("fm_name", fm_id)),
+                category=str(raw.get("category", "")),
+                present=bool(raw.get("present", False)),
+                confidence=float(raw.get("confidence", 1.0)),
+            )
+
+    localization = data.get("localization", {})
+    if isinstance(localization, dict):
+        for fm_id, raw in localization.items():
+            if not isinstance(raw, dict):
+                continue
+            profile.localization[str(fm_id)] = FMLocalization(
+                agent=str(raw.get("agent", "")),
+                step=str(raw.get("step", "")),
+                context=str(raw.get("context", "")),
+                root_cause=str(raw.get("root_cause", "")),
+                dag_component=str(raw.get("dag_component", "other")),
+            )
+
+    return profile
 
 
 def _write_json(path: str | Path, data: object) -> str:
@@ -262,6 +294,112 @@ class Orchestrator:
                 _write_json(job_dir / f"{job['fm_id']}.json", payload)
 
         return written
+
+    def _load_persisted_diagnosis(
+        self,
+        diagnose_dir: str | Path,
+        tasks: list[str],
+        target_fm: str | None = None,
+    ) -> tuple[list[MASTrace], list[FMProfile], list[dict], list[tuple[str, int]]]:
+        base = Path(diagnose_dir)
+        if not base.exists():
+            raise FileNotFoundError(f"Persisted diagnose directory does not exist: {base}")
+
+        profiles_path = base / "profiles.json"
+        if not profiles_path.exists():
+            raise FileNotFoundError(f"Persisted diagnose profiles are missing: {profiles_path}")
+
+        raw_entries = json.loads(profiles_path.read_text(encoding="utf-8"))
+        if not isinstance(raw_entries, list):
+            raise ValueError(f"Persisted diagnose profiles must be a JSON list: {profiles_path}")
+
+        traces: list[MASTrace | None] = [None] * len(tasks)
+        profiles: list[FMProfile | None] = [None] * len(tasks)
+        for raw in raw_entries:
+            if not isinstance(raw, dict):
+                continue
+            idx = int(raw.get("task_index", -1))
+            if idx < 0 or idx >= len(tasks):
+                continue
+            trace_path = str(raw.get("trace_path", ""))
+            if not trace_path:
+                raise ValueError(f"Persisted diagnose entry missing trace_path for task index {idx}")
+            trace_file = Path(trace_path)
+            if not trace_file.exists():
+                raise FileNotFoundError(f"Persisted trace file referenced by diagnose artifacts is missing: {trace_file}")
+
+            traces[idx] = MASTrace(
+                trace_id=int(raw.get("trace_id", idx)),
+                mas_name=str(raw.get("mas_name", getattr(self.dag, "dag_id", "OptPilot"))),
+                llm_name=str(raw.get("llm_name", getattr(self.runner, "model", ""))),
+                benchmark_name=str(raw.get("benchmark_name", "")),
+                trajectory=trace_file.read_text(encoding="utf-8"),
+                trace_path=str(trace_file),
+                task_key=str(raw.get("task_key", tasks[idx][:50])),
+                task_success=raw.get("task_success"),
+                task_score=raw.get("task_score"),
+                latency_s=raw.get("latency_s"),
+            )
+            profiles[idx] = _profile_from_dict(raw)
+
+        missing = [i for i, trace in enumerate(traces) if trace is None or profiles[i] is None]
+        if missing:
+            raise ValueError(
+                f"Persisted diagnose artifacts missing task indices: {missing[:10]}"
+                f"{'...' if len(missing) > 10 else ''}"
+            )
+
+        summary_path = base / "summary.json"
+        summary_data: dict[str, object] = {}
+        if summary_path.exists():
+            loaded = json.loads(summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                summary_data = loaded
+
+        summary_ranking = summary_data.get("fm_ranking", [])
+        fm_ranking = [
+            (str(item.get("fm_id", "")), int(item.get("count", 0)))
+            for item in summary_ranking
+            if isinstance(item, dict) and item.get("fm_id")
+        ]
+        if target_fm:
+            fm_ranking = [item for item in fm_ranking if item[0] == target_fm]
+        if not fm_ranking:
+            fm_ranking = rank_fm_groups(profiles, target_fm)
+
+        skill_jobs_dir = base / "skill_jobs"
+        skill_jobs: list[dict] = []
+        if skill_jobs_dir.exists():
+            for job_path in sorted(skill_jobs_dir.glob("*.json")):
+                payload = json.loads(job_path.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict):
+                    continue
+                fm_id = str(payload.get("fm_id", ""))
+                if not fm_id:
+                    continue
+                if target_fm and fm_id != target_fm:
+                    continue
+                skill_jobs.append({
+                    "fm_id": fm_id,
+                    "proposal_idx": [int(i) for i in payload.get("proposal_idx", [])],
+                    "validation_idx": [int(i) for i in payload.get("validation_idx", [])],
+                    "prior_negatives": self.negatives_store.load(fm_id),
+                })
+
+        if not skill_jobs:
+            for fm_id, _count in fm_ranking:
+                split = split_proposal_validation_indices(fm_id, profiles)
+                if split is None:
+                    continue
+                proposal_idx, validation_idx = split
+                skill_jobs.append({
+                    "fm_id": fm_id,
+                    "proposal_idx": proposal_idx,
+                    "validation_idx": validation_idx,
+                    "prior_negatives": self.negatives_store.load(fm_id),
+                })
+
+        return traces, profiles, skill_jobs, fm_ranking
 
     def optimize(
         self,
@@ -766,6 +904,144 @@ class Orchestrator:
             "dag_versions": dag_versions,
             "trace_source": str(trace_base),
             "diagnose_dir": str(diagnosis_dir) if diagnosis_dir else "",
+        }
+        self.tracker.save_local("skill_optimization.json")
+        return summary
+
+    async def aoptimize_from_diagnose(
+        self,
+        tasks: list[str],
+        diagnose_dir: str | Path,
+        target_fm: str | None = None,
+        budget: SkillBudget | None = None,
+        concurrency: int = 256,
+        dag_output_base: str | Path | None = None,
+    ) -> dict:
+        """Warm-start optimization directly from persisted diagnose artifacts."""
+        current_dag = self.dag
+        results: list[dict] = []
+        dag_versions: list[dict[str, str | int]] = []
+        if dag_output_base:
+            initial_path = _save_dag_if_possible(current_dag, Path(dag_output_base) / "initial.yaml")
+            if initial_path:
+                dag_versions.append({"stage": "initial", "path": initial_path})
+
+        round_dag_dir = Path(dag_output_base) / "round_1" if dag_output_base else None
+        if round_dag_dir:
+            start_path = _save_dag_if_possible(current_dag, round_dag_dir / "start.yaml")
+            if start_path:
+                dag_versions.append({"stage": "round_start", "round": 1, "path": start_path})
+
+        print("=== OptPilot Skill Workflow Diagnose Reuse (async) ===")
+        print(f"Tasks: {len(tasks)}, Diagnose source: {diagnose_dir}, Concurrency: {concurrency}")
+        print()
+        print("  [1/3] Loading persisted diagnose artifacts...")
+        traces, profiles, skill_jobs, fm_ranking = self._load_persisted_diagnosis(
+            diagnose_dir=diagnose_dir,
+            tasks=tasks,
+            target_fm=target_fm,
+        )
+
+        if not fm_ranking:
+            print("  No active FM groups with ≥2 traces. Done!")
+            return {
+                "total_rounds": 0,
+                "results": [],
+                "dag_versions": dag_versions,
+                "diagnose_source": str(diagnose_dir),
+            }
+
+        print(f"  Active FM groups: {', '.join(f'{fid}({c})' for fid, c in fm_ranking)}")
+
+        if not skill_jobs:
+            print("  No dispatchable skills. Done!")
+            return {
+                "total_rounds": 1,
+                "results": [],
+                "dag_versions": dag_versions,
+                "diagnose_source": str(diagnose_dir),
+            }
+
+        print(f"  [2/3] Dispatching {len(skill_jobs)} skills in parallel...")
+        skill_coros = [
+            self._arun_skill(job, current_dag, tasks, traces, profiles, budget, concurrency)
+            for job in skill_jobs
+        ]
+        skill_results_raw = await asyncio.gather(*skill_coros)
+
+        successful_results: list[SkillResult] = []
+        for fm_id, result in skill_results_raw:
+            fm_name = GROUP_NAMES.get(fm_id, fm_id)
+            round_entry = {
+                "round": 1,
+                "fm_id": fm_id,
+                "fm_name": fm_name,
+                "success": result.success,
+                "inner_iterations": result.inner_iterations,
+                "outer_rounds": result.outer_rounds,
+                "final_fm_rate": result.final_fm_rate,
+                "final_pass_rate": result.final_pass_rate,
+                "n_negatives": len(result.negatives),
+            }
+            results.append(round_entry)
+            self.tracker.log(round_entry, step=len(results) - 1)
+
+            if result.success:
+                print(
+                    f"  Group-{fm_id} ({fm_name}): REPAIRED "
+                    f"(fm={result.final_fm_rate:.2f}, pass={result.final_pass_rate:.3f})"
+                )
+                successful_results.append(result)
+                if round_dag_dir and result.dag is not None:
+                    skill_path = _save_dag_if_possible(
+                        result.dag,
+                        round_dag_dir / f"skill_{fm_id}_success.yaml",
+                    )
+                    if skill_path:
+                        dag_versions.append({
+                            "stage": "skill_success",
+                            "round": 1,
+                            "fm_id": fm_id,
+                            "path": skill_path,
+                        })
+            else:
+                print(f"  Group-{fm_id} ({fm_name}): FAILED after {result.outer_rounds} rounds")
+                self.negatives_store.extend(fm_id, result.negatives)
+                self.evolver.record_failure(fm_id)
+
+        if successful_results:
+            if len(successful_results) == 1:
+                merged_dag = successful_results[0].dag
+                print(f"  [3/3] Single success — adopting DAG from Skill-{successful_results[0].fm_id}.")
+            else:
+                print(f"  [3/3] Forging {len(successful_results)} successful repairs...")
+                merged_dag = await forge(current_dag, successful_results)
+                print(
+                    "  Forge complete — merged changes from: "
+                    f"{', '.join(r.fm_id for r in successful_results)}"
+                )
+
+            current_dag = merged_dag
+            self.dag = current_dag
+            for r in successful_results:
+                self.evolver.reset_failures(r.fm_id)
+        else:
+            print("  No successful repairs this round.")
+
+        if round_dag_dir:
+            final_round_path = _save_dag_if_possible(current_dag, round_dag_dir / "final.yaml")
+            if final_round_path:
+                dag_versions.append({"stage": "round_final", "round": 1, "path": final_round_path})
+        if dag_output_base:
+            final_path = _save_dag_if_possible(current_dag, Path(dag_output_base) / "final.yaml")
+            if final_path:
+                dag_versions.append({"stage": "final", "path": final_path})
+
+        summary = {
+            "total_rounds": 1,
+            "results": results,
+            "dag_versions": dag_versions,
+            "diagnose_source": str(diagnose_dir),
         }
         self.tracker.save_local("skill_optimization.json")
         return summary
