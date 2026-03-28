@@ -25,8 +25,6 @@ from optpilot.models import SkillBudget
 from optpilot.modules.runner import OptPilotRunner
 from optpilot.orchestrator import Orchestrator
 
-import optpilot.skills  # noqa: F401  — trigger @register_skill for A-F
-
 DAG_FILE = "ag2_mathchat.yaml"
 RESULT_PREFIX = "ag2_mathchat_skill"
 
@@ -112,6 +110,7 @@ async def run(
     n_train: int = 100,
     n_test: int = 100,
     max_rounds: int = 5,
+    eval_tasks: int | None = None,
     target_group: str | None = None,
     use_wandb: bool = False,
     model: str = "openai/gpt-oss-120b",
@@ -182,6 +181,8 @@ async def run(
     print(f"  Train:       {len(train_examples)} tasks  {dict(train_suite.benchmark_counts())}")
     print(f"  Test:        {len(test_examples)} tasks  {dict(test_suite.benchmark_counts())}")
     print(f"  Rounds:      {max_rounds}")
+    if eval_tasks:
+        print(f"  Eval/round:  {eval_tasks} tasks (sampled)")
     if target_group:
         print(f"  Target FM:   Group-{target_group}")
     if reuse_diagnose_dir:
@@ -221,6 +222,7 @@ async def run(
             concurrency=concurrency,
             trace_output_base=artifact_dir / "optimization",
             dag_output_base=dag_versions_dir / "optimization",
+            eval_tasks_per_round=eval_tasks,
         )
 
     # Evaluate final DAG on held-out test set
@@ -259,6 +261,7 @@ async def run(
         "n_train": n_train,
         "n_test": n_test,
         "max_rounds": max_rounds,
+        "eval_tasks_per_round": eval_tasks,
         "target_group": target_group,
         "concurrency": concurrency,
         "timeout_s": timeout,
@@ -294,7 +297,8 @@ if __name__ == "__main__":
     parser.add_argument("--dag", default=None, help="Path to MASDAG YAML")
     parser.add_argument("--train", type=int, default=100, help="Train set size")
     parser.add_argument("--test", type=int, default=100, help="Test set size")
-    parser.add_argument("--rounds", type=int, default=1, help="Max optimization rounds (default 1, skills handle convergence internally)")
+    parser.add_argument("--rounds", type=int, default=50, help="Max optimization rounds")
+    parser.add_argument("--eval-tasks", type=int, default=None, help="Tasks per round (subsample from train set, default: all)")
     parser.add_argument("--group", default=None, help="Target a specific FM group (A-F)")
     parser.add_argument("--model", default="openai/gpt-oss-120b", help="Model ID on Together AI")
     parser.add_argument("--concurrency", type=int, default=512, help="Max concurrent tasks")
@@ -313,6 +317,7 @@ if __name__ == "__main__":
         n_train=args.train,
         n_test=args.test,
         max_rounds=args.rounds,
+        eval_tasks=args.eval_tasks,
         target_group=args.group,
         use_wandb=args.wandb,
         model=args.model,

@@ -72,6 +72,7 @@ ONLINE_SKILLS_DIR = LIBRARY_DIR / "online_skills"
 DAG_DIR = _PROJECT_ROOT / "dags"            # MASDAG definition files
 EVOLVED_SKILLS_DIR = LIBRARY_DIR / "evolved_skills"
 NEGATIVES_DIR = LIBRARY_DIR / "negatives"
+JACOBIAN_DIR = LIBRARY_DIR / "jacobian"
 PROJECT_ROOT = _PROJECT_ROOT
 
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -82,4 +83,5 @@ ONLINE_HINTS_DIR.mkdir(parents=True, exist_ok=True)
 ONLINE_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 EVOLVED_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 NEGATIVES_DIR.mkdir(parents=True, exist_ok=True)
+JACOBIAN_DIR.mkdir(parents=True, exist_ok=True)
 DAG_DIR.mkdir(exist_ok=True)

@@ -324,7 +324,7 @@ def call_llm(
     model: str = SYSTEM_MODEL,
     temperature: float = 0.2,
     max_tokens: int = 16384,
-    max_retries: int = 3,
+    max_retries: int = 8,
 ) -> str:
     """Call Together AI LLM with exponential backoff.
 
@@ -356,8 +356,8 @@ def call_llm(
             if attempt == max_retries - 1:
                 raise
             err_str = str(e)
-            if "rate_limit" in err_str or "429" in err_str:
-                wait = 30 * (attempt + 1)  # rate limit: 30s, 60s, 90s
+            if "rate_limit" in err_str or "429" in err_str or "503" in err_str or "service_unavailable" in err_str:
+                wait = 30 * (attempt + 1)
             else:
                 wait = 2 ** (attempt + 1)
             print(f"LLM call failed (attempt {attempt + 1}): {e}. Retrying in {wait}s...")
@@ -370,7 +370,7 @@ async def acall_llm(
     model: str = SYSTEM_MODEL,
     temperature: float = 0.2,
     max_tokens: int = 16384,
-    max_retries: int = 3,
+    max_retries: int = 8,
 ) -> str:
     """Async Together AI call with model-family concurrency and RPM limits."""
     client = get_async_client()
@@ -396,7 +396,7 @@ async def acall_llm(
             if attempt == max_retries - 1:
                 raise
             err_str = str(e)
-            if "rate_limit" in err_str or "429" in err_str:
+            if "rate_limit" in err_str or "429" in err_str or "503" in err_str or "service_unavailable" in err_str:
                 wait = 30 * (attempt + 1)
             else:
                 wait = 2 ** (attempt + 1)
@@ -413,7 +413,7 @@ async def acall_llm_with_tools(
     temperature: float = 0.2,
     max_tokens: int = 16384,
     max_turns: int = 20,
-    max_retries: int = 3,
+    max_retries: int = 8,
 ) -> list[dict]:
     """Async LLM agent loop with tool calling.
 
@@ -448,7 +448,7 @@ async def acall_llm_with_tools(
                 if attempt == max_retries - 1:
                     raise
                 err_str = str(e)
-                if "rate_limit" in err_str or "429" in err_str:
+                if "rate_limit" in err_str or "429" in err_str or "503" in err_str or "service_unavailable" in err_str:
                     wait = 30 * (attempt + 1)
                 else:
                     wait = 2 ** (attempt + 1)

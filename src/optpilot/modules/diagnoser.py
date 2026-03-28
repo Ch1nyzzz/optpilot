@@ -207,6 +207,25 @@ class Diagnoser:
                     results[idx] = FMProfile(trace_id=traces[idx].trace_id)
         return [results[i] for i in range(len(traces))]
 
+    def classify_batch(self, traces: list[MASTrace]) -> list[FMProfile]:
+        """Classify multiple traces without localization."""
+        if not traces:
+            return []
+        results: dict[int, FMProfile] = {}
+        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(traces))) as pool:
+            futures = {
+                pool.submit(self._build_profile, t): i
+                for i, t in enumerate(traces)
+            }
+            for fut in as_completed(futures):
+                idx = futures[fut]
+                try:
+                    results[idx] = fut.result()
+                except Exception as e:
+                    print(f"  Warning: classify_batch failed for trace index {idx}: {e}")
+                    results[idx] = FMProfile(trace_id=traces[idx].trace_id)
+        return [results[i] for i in range(len(traces))]
+
     async def adiagnose_batch(self, traces: list[MASTrace], target_group: str | None = None) -> list[FMProfile]:
         """Async batch diagnosis."""
         if not traces:
@@ -223,6 +242,24 @@ class Diagnoser:
                     results[idx] = FMProfile(trace_id=trace.trace_id)
 
         await asyncio.gather(*(diagnose_one(i, t) for i, t in enumerate(traces)))
+        return [results[i] for i in range(len(traces))]
+
+    async def aclassify_batch(self, traces: list[MASTrace]) -> list[FMProfile]:
+        """Async batch classification without localization."""
+        if not traces:
+            return []
+        semaphore = asyncio.Semaphore(min(self.max_workers, len(traces)))
+        results: dict[int, FMProfile] = {}
+
+        async def classify_one(idx: int, trace: MASTrace) -> None:
+            async with semaphore:
+                try:
+                    results[idx] = await self._abuild_profile(trace)
+                except Exception as e:
+                    print(f"  Warning: aclassify_batch failed for trace index {idx}: {e}")
+                    results[idx] = FMProfile(trace_id=trace.trace_id)
+
+        await asyncio.gather(*(classify_one(i, t) for i, t in enumerate(traces)))
         return [results[i] for i in range(len(traces))]
 
     # --- internal ---

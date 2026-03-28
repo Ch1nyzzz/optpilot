@@ -1,13 +1,4 @@
-"""Skill Workflows — one per FM group (A-F)."""
+"""Repair skills — Jacobian-driven pattern catalog and repair loop."""
 
-from optpilot.skills.registry import get_skill, register_skill  # noqa: F401
-
-# Import all skills to trigger @register_skill decorators.
-from optpilot.skills import (  # noqa: F401
-    skill_a,
-    skill_b,
-    skill_c,
-    skill_d,
-    skill_e,
-    skill_f,
-)
+from optpilot.skills.repair_loop import aevolve, analyze, reflect  # noqa: F401
+from optpilot.skills.repair_patterns import PatternCatalog  # noqa: F401

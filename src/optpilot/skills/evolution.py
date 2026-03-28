@@ -1,13 +1,13 @@
-"""SkillEvolver — LLM-powered evolution of Skill source code.
+"""CatalogEvolver — LLM-powered evolution of the repair pattern catalog.
 
-When a Skill repeatedly fails, the evolver reads its Python source,
-accumulated negatives, and uses tool-calling to modify the source code.
+When repair patterns repeatedly fail for an FM group, the evolver uses
+LLM tool-calling to add new patterns, refine descriptions, or mark
+ineffective ones in the PatternCatalog.
 """
 
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import os
 import subprocess
@@ -26,88 +26,163 @@ from optpilot.config import (
 )
 from optpilot.llm import acall_llm_with_tools
 from optpilot.models import ReflectInsight
-from optpilot.skills.base import BaseSkill
+from optpilot.skills.jacobian import RepairJacobian
+from optpilot.skills.repair_patterns import PatternCatalog, RepairPattern
 
-_EVOLVED_DIR = LIBRARY_DIR / "evolved_skills"
-_SKILL_AGENT_TRACE_DIR = LIBRARY_DIR / "skill_agent_traces"
 _META_EVOLVE_TRACE_DIR = LIBRARY_DIR / "meta_evolve_traces"
-_SKILLS_BASE_PATH = PROJECT_ROOT / "src/optpilot/skills/base.py"
-_SKILLS_TOOLS_PATH = PROJECT_ROOT / "src/optpilot/skills/tools.py"
-_SKILLS_REGISTRY_PATH = PROJECT_ROOT / "src/optpilot/skills/registry.py"
-_SUBSKILLS_PATH = PROJECT_ROOT / "src/optpilot/skills/subskills.py"
-_DAG_EXECUTOR_PATH = PROJECT_ROOT / "src/optpilot/dag/executor.py"
-_DAG_CORE_PATH = PROJECT_ROOT / "src/optpilot/dag/core.py"
-_MODELS_PATH = PROJECT_ROOT / "src/optpilot/models.py"
 _ARCHITECTURE_PATH = PROJECT_ROOT / "memory_bank/architecture.md"
 _PROJECT_GOAL_PATH = PROJECT_ROOT / "memory_bank/project_goal.md"
 _PROGRESS_PATH = PROJECT_ROOT / "memory_bank/progress.md"
+_REPAIR_PATTERNS_PATH = PROJECT_ROOT / "src/optpilot/skills/repair_patterns.py"
+_DAG_EXECUTOR_PATH = PROJECT_ROOT / "src/optpilot/dag/executor.py"
+_DAG_CORE_PATH = PROJECT_ROOT / "src/optpilot/dag/core.py"
+
 
 _EVOLVE_SYSTEM_PROMPT = """\
-You are a meta-optimizer that improves MAS repair skill source code.
+You are a meta-optimizer that improves the repair pattern catalog for a MAS \
+repair system.
 
-You have two tools:
-- **search_and_replace**: modify the Python source file by replacing exact text segments.
-- **bash**: run shell commands. The current skill source is at $SKILL_FILE. \
-Use `cat $SKILL_FILE` to read it. You have a generous budget: up to \
-{max_turns} tool-calling turns and {max_tokens} completion tokens, so inspect \
-the relevant files before editing.
+You have three tools:
+- **add_pattern**: add a new repair pattern to the catalog.
+- **update_pattern**: modify an existing pattern's description, name, \
+target_components, or mark it as ineffective.
+- **bash**: run shell commands to inspect project files for context.
 
 ## Prepared Context Files
-- `$SKILL_FILE` — the current skill source you are modifying
-- `meta_context.md` — prepared index of repository paths, project memory, and persistent experience
-- `failure_summary.md` — concise summary of recent failed repair attempts
-- `failures.json` — structured ReflectInsight records for the current FM group
+- `catalog.json` — the current pattern catalog (JSON)
+- `jacobian_report.md` — empirical pattern success rates and recommendation \
+divergence data (which patterns work, which get ignored by the repair LLM)
+- `meta_context.md` — index of repository paths and persistent experience
+- `failure_summary.md` — condensed summary of recent failed repair attempts
+- `failures.json` — structured failure records for this FM group
 
 ## Workflow
-1. Read `cat meta_context.md`, `cat failure_summary.md`, and `cat $SKILL_FILE`.
-2. Use `bash` to inspect only the most relevant repository files referenced in `meta_context.md`.
-3. Analyze the failure patterns and identify what needs to change.
-4. Apply modifications with `search_and_replace` — targeted changes only.
-5. Validate syntax with `bash`: \
-`python3 -c "compile(open('$SKILL_FILE').read(), 'skill.py', 'exec')" && echo OK`
-6. When done, respond with a summary of what you changed and why.
+1. Read `cat jacobian_report.md` — this is your primary signal. It shows \
+which patterns actually work, which consistently fail, and where the repair \
+LLM diverges from recommendations (does something different than suggested).
+2. Read `cat catalog.json` and `cat failure_summary.md`.
+3. Use `bash` to inspect repository files referenced in `meta_context.md` \
+if you need to understand the repair semantics.
+4. Decide what to change. You have a spectrum of actions from conservative \
+to aggressive — choose based on how badly things are failing:
 
-## What you can modify
-- ANALYZE_HINT to guide better diagnosis
-- Override analyze(), evolve(), or reflect() with custom implementations
-- Adjust MAX_INNER_ITERS, CONVERGENCE_THRESHOLD, NO_IMPROVE_PATIENCE
-- Change prompt templates
+### Conservative (some patterns still work)
+   - **Refine** pattern descriptions that get ignored — the repair LLM may \
+not follow them because the description is too vague or mismatched.
+   - **Update target_components** if the Jacobian shows a pattern works for \
+different DAG components than originally specified.
+
+### Moderate (most patterns underperform)
+   - **Disable** patterns with consistently low success rates (effective=false).
+   - **Promote** observed divergences: if the repair LLM repeatedly ignores \
+pattern A and does something else that works, add that "something else" as \
+a first-class pattern.
+
+### Aggressive — 不破不立 (nothing in the catalog works)
+   - If existing patterns have been exhausted and keep failing, **invent \
+entirely new repair strategies**. Do not just rephrase old patterns.
+   - Study the failure_summary and trace files to understand *what the actual \
+failure mechanism is*, then design a novel pattern that directly targets it.
+   - Think beyond the current categories. Consider strategies like: \
+restructuring the entire agent communication topology, introducing new \
+meta-cognitive prompts, changing the information flow architecture, \
+combining multiple atomic fixes into a single compound pattern, etc.
+   - A creative new pattern that might work is more valuable than a refined \
+old pattern that has already proven ineffective.
+
+5. Summarize what you changed and why.
 
 ## Rules
-- The file must import from optpilot.skills.base (GenericSkill or BaseSkill)
-- Must use @register_skill decorator
-- Must keep the same FM_GROUP value
-- Must be valid, compilable Python"""
+- Each pattern must have a unique pattern_id (lowercase_with_underscores).
+- Descriptions should be actionable and specific — they get injected directly \
+into the repair LLM's prompt as repair directions. Vague descriptions like \
+"improve the system" are useless; concrete ones like "add a carry_data=true \
+edge from ProblemSolver to Verifier so the original problem statement is \
+preserved across loop iterations" actually guide the repair.
+- target_components must be from: agent_prompt, edge_carry_data, \
+edge_condition, edge_missing, loop_config, node_config, other.
+- Do not remove all patterns — keep at least 3 effective patterns.
+- Focus on FM group {fm_group}."""
 
 _EVOLVE_USER_PROMPT = """\
-The Skill for FM group {fm_group} has repeatedly failed to fix problems.
+The repair patterns for FM group {fm_group} have repeatedly failed \
+({n_failures} consecutive failures).
 
-## Accumulated Failures ({n_failures} total)
+## Accumulated Failures
 {failures_text}
 
-## Prepared Context
-- Read `meta_context.md` first for the key repository file addresses and one-line summaries.
-- Read `failure_summary.md` for the condensed failure digest, then inspect `failures.json` if needed.
+## Your Task
+Read these files in order:
+1. `jacobian_report.md` — empirical success rates and divergence data.
+2. `catalog.json` — current patterns.
+3. `failure_summary.md` — what went wrong.
 
-Analyze the failure patterns and modify the skill source code to improve its \
-repair strategy. Use `bash` aggressively to inspect the files referenced in `meta_context.md` \
-instead of relying only on the prompt summary."""
+Then decide how aggressively to change the catalog:
+- If some patterns still have decent success rates, refine and promote.
+- If *everything* is failing, be bold: disable the dead weight and **invent \
+new approaches** based on what the failure traces actually show. The current \
+catalog clearly isn't solving this failure mode — incremental refinement of \
+broken patterns won't help. Think from first principles about what repair \
+strategy could actually fix this class of MAS failure."""
 
 
-# Tool schemas for skill evolution (same structure, different target)
-_SKILL_TOOL_SCHEMAS = [
+# Tool schemas for catalog evolution
+_CATALOG_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "search_and_replace",
-            "description": "Replace text in the skill Python source file.",
+            "name": "add_pattern",
+            "description": "Add a new repair pattern to the catalog.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "old_str": {"type": "string", "description": "Exact text to find."},
-                    "new_str": {"type": "string", "description": "Replacement text."},
+                    "pattern_id": {
+                        "type": "string",
+                        "description": "Unique ID (lowercase_with_underscores).",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Human-readable name for the pattern.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Actionable description injected into LLM repair prompts.",
+                    },
+                    "target_components": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "DAG components this pattern targets.",
+                    },
                 },
-                "required": ["old_str", "new_str"],
+                "required": ["pattern_id", "name", "description", "target_components"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_pattern",
+            "description": "Update an existing pattern in the catalog.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern_id": {
+                        "type": "string",
+                        "description": "ID of the pattern to update.",
+                    },
+                    "name": {"type": "string", "description": "New name (optional)."},
+                    "description": {"type": "string", "description": "New description (optional)."},
+                    "target_components": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "New target components (optional).",
+                    },
+                    "effective": {
+                        "type": "boolean",
+                        "description": "Set to false to disable this pattern.",
+                    },
+                },
+                "required": ["pattern_id"],
             },
         },
     },
@@ -115,7 +190,7 @@ _SKILL_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "bash",
-            "description": "Execute a bash command. $SKILL_FILE points to the source.",
+            "description": "Execute a bash command to inspect files.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -128,49 +203,66 @@ _SKILL_TOOL_SCHEMAS = [
 ]
 
 
-class _SkillFileContext:
-    """Manages the skill source file for tool execution."""
+class _CatalogContext:
+    """Manages the catalog and temp workspace for tool execution."""
 
-    def __init__(self, source: str):
-        self.source = source
-        self._tmpdir = tempfile.mkdtemp(prefix="optpilot_meta_")
-        self.skill_file = os.path.join(self._tmpdir, "skill.py")
-        with open(self.skill_file, "w") as f:
-            f.write(source)
+    def __init__(self, catalog: PatternCatalog):
+        self.catalog = catalog
+        self._tmpdir = tempfile.mkdtemp(prefix="optpilot_catalog_")
+        # Write catalog snapshot
+        catalog_data = {pid: asdict(p) for pid, p in catalog.items()}
+        self._write_file("catalog.json", json.dumps(catalog_data, indent=2, ensure_ascii=False))
 
     def execute_tool(self, name: str, args: dict) -> str:
-        if name == "search_and_replace":
-            return self._search_and_replace(args)
+        if name == "add_pattern":
+            return self._add_pattern(args)
+        elif name == "update_pattern":
+            return self._update_pattern(args)
         elif name == "bash":
             return self._bash(args)
         return f"Error: unknown tool '{name}'"
 
-    def _search_and_replace(self, args: dict) -> str:
-        old_str = args.get("old_str", "")
-        new_str = args.get("new_str", "")
-        if not old_str:
-            return "Error: old_str is empty."
+    def _add_pattern(self, args: dict) -> str:
+        pattern_id = args.get("pattern_id", "")
+        if not pattern_id:
+            return "Error: pattern_id is required."
+        if pattern_id in self.catalog:
+            return f"Error: pattern '{pattern_id}' already exists. Use update_pattern instead."
 
-        count = self.source.count(old_str)
-        if count == 0:
-            return "Error: old_str not found. Use `cat $SKILL_FILE` to see the current source."
-        if count > 1:
-            return f"Error: old_str matches {count} locations. Add more context."
+        pattern = RepairPattern(
+            pattern_id=pattern_id,
+            name=args.get("name", pattern_id),
+            description=args.get("description", ""),
+            target_components=args.get("target_components", []),
+            effective=True,
+        )
+        self.catalog.add_pattern(pattern)
+        return f"OK. Added pattern '{pattern_id}'."
 
-        self.source = self.source.replace(old_str, new_str, 1)
-        with open(self.skill_file, "w") as f:
-            f.write(self.source)
-        return f"OK. Replaced 1 occurrence."
+    def _update_pattern(self, args: dict) -> str:
+        pattern_id = args.get("pattern_id", "")
+        if not pattern_id:
+            return "Error: pattern_id is required."
+
+        success = self.catalog.update_pattern(
+            pattern_id,
+            name=args.get("name"),
+            description=args.get("description"),
+            target_components=args.get("target_components"),
+            effective=args.get("effective"),
+        )
+        if not success:
+            return f"Error: pattern '{pattern_id}' not found."
+        return f"OK. Updated pattern '{pattern_id}'."
 
     def _bash(self, args: dict) -> str:
         command = args.get("command", "")
         if not command:
             return "Error: command is empty."
-        env = {**os.environ, "SKILL_FILE": self.skill_file}
         try:
             result = subprocess.run(
                 command, shell=True, capture_output=True, text=True,
-                timeout=30, cwd=self._tmpdir, env=env,
+                timeout=30, cwd=self._tmpdir,
             )
             output = result.stdout
             if result.stderr:
@@ -179,26 +271,13 @@ class _SkillFileContext:
                 output += f"\n(exit code: {result.returncode})"
             if len(output) > 4000:
                 output = output[:4000] + "\n... (truncated)"
-
-            # Sync back if source was modified via bash
-            if os.path.exists(self.skill_file):
-                with open(self.skill_file) as f:
-                    new_source = f.read()
-                if new_source != self.source:
-                    try:
-                        compile(new_source, "skill.py", "exec")
-                        self.source = new_source
-                    except SyntaxError:
-                        with open(self.skill_file, "w") as f:
-                            f.write(self.source)
-
             return output or "(no output)"
         except subprocess.TimeoutExpired:
             return "Error: command timed out."
         except Exception as e:
             return f"Error: {e}"
 
-    def write_file(self, filename: str, content: str) -> str:
+    def _write_file(self, filename: str, content: str) -> str:
         path = os.path.join(self._tmpdir, filename)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -224,85 +303,50 @@ def _build_failure_summary(negatives: list[ReflectInsight], max_items: int = 20)
     return "\n".join(lines).rstrip()
 
 
-def _build_meta_context(
-    fm_group: str,
-    source_path: Path | None,
-    evolved_dir: Path,
-) -> str:
+def _build_meta_context(fm_group: str) -> str:
     negatives_path = NEGATIVES_DIR / f"negatives_{fm_group}.json"
-    subskills_dir = LIBRARY_DIR / "subskills" / fm_group
-    skill_agent_trace_dir = _SKILL_AGENT_TRACE_DIR / fm_group
     meta_trace_dir = _META_EVOLVE_TRACE_DIR / fm_group
-    latest_skill_agent_traces = sorted(skill_agent_trace_dir.glob("*.json"))[-5:]
-    latest_meta_traces = sorted(meta_trace_dir.glob("*.json"))[-5:]
 
     lines = [
-        "# Meta Skill Context Index",
+        "# Catalog Evolution Context Index",
         "",
         "Read this file first, then use bash to inspect only the files you need.",
         "",
-        "## Current Target",
-        f"- FM group: {fm_group}",
-        f"- Working skill file: {source_path if source_path else '$SKILL_FILE (temporary copy)'}",
-        f"- Output directory for evolved skills: {evolved_dir}",
-        "",
-        "## Prepared Local Files",
-        "- $SKILL_FILE: editable temporary copy of the current skill source",
-        "- meta_context.md: this index file",
-        "- failure_summary.md: condensed recent failure digest",
-        "- failures.json: structured ReflectInsight records copied into the temp workspace",
+        f"## Target FM Group: {fm_group}",
         "",
         "## Repository Files To Inspect With Bash",
-        f"- {_SKILLS_BASE_PATH}: shared BaseSkill/GenericSkill workflow, prompts, and meta-evolution trigger behavior",
-        f"- {_SKILLS_TOOLS_PATH}: bash/search_and_replace tool semantics for normal skill evolution",
-        f"- {_SKILLS_REGISTRY_PATH}: registration and loading rules for evolved skill classes",
-        f"- {_SUBSKILLS_PATH}: successful sub-skill persistence and prompt formatting",
+        f"- {_REPAIR_PATTERNS_PATH}: repair pattern definitions and PatternCatalog class",
         f"- {_DAG_EXECUTOR_PATH}: runtime semantics of the repaired MAS DAG",
         f"- {_DAG_CORE_PATH}: MASDAG schema and parsing behavior",
-        f"- {_MODELS_PATH}: ReflectInsight and SkillBudget data models",
-        f"- {_ARCHITECTURE_PATH}: current system architecture and workflow notes",
+        f"- {_ARCHITECTURE_PATH}: current system architecture",
         f"- {_PROJECT_GOAL_PATH}: project mission and scope",
         f"- {_PROGRESS_PATH}: current milestones and status",
         "",
         "## Persistent Experience",
         f"- {negatives_path}: persisted negative lessons for this FM group",
-        f"- {subskills_dir}: successful reusable sub-skills for this FM group",
-        f"- {skill_agent_trace_dir}: persisted skill-agent tool traces for this FM group",
-        *[
-            f"- {path}: recent skill-agent tool trace transcript"
-            for path in latest_skill_agent_traces
-        ],
-        f"- {evolved_dir}: previously evolved skill versions for this FM group",
-        f"- {meta_trace_dir}: persisted meta-evolve tool traces for this FM group",
-        *[
-            f"- {path}: recent meta-evolve tool trace transcript"
-            for path in latest_meta_traces
-        ],
+        f"- {meta_trace_dir}: previous catalog evolution traces",
         "",
-        "Use bash (`cat`, `sed -n`, `rg`) to inspect these files before making edits.",
+        "Use bash to inspect these files before making changes.",
     ]
     return "\n".join(lines)
 
 
-def _persist_meta_tool_trace(
+def _persist_trace(
     fm_group: str,
-    source_path: Path | None,
-    ctx: _SkillFileContext,
+    ctx: _CatalogContext,
     final_msgs: list[dict],
     negatives: list[ReflectInsight],
 ) -> str:
     trace_dir = _META_EVOLVE_TRACE_DIR / fm_group
     trace_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    trace_path = trace_dir / f"tool_trace_{timestamp}.json"
+    trace_path = trace_dir / f"catalog_evolve_{timestamp}.json"
     payload = {
         "created_at": datetime.now().isoformat(),
         "fm_group": fm_group,
-        "source_path": str(source_path) if source_path else "",
-        "skill_file": ctx.skill_file,
         "messages": final_msgs,
         "negatives": [asdict(neg) for neg in negatives],
-        "final_source": ctx.source,
+        "final_catalog": {pid: asdict(p) for pid, p in ctx.catalog.items()},
     }
     trace_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, default=str),
@@ -311,12 +355,16 @@ def _persist_meta_tool_trace(
     return str(trace_path)
 
 
-class SkillEvolver:
-    """Evolve Skill source code when it repeatedly fails."""
+class CatalogEvolver:
+    """Evolve the pattern catalog when repair patterns repeatedly fail."""
 
-    def __init__(self, evolved_dir: Path | None = None):
-        self.evolved_dir = evolved_dir or _EVOLVED_DIR
-        self.evolved_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(
+        self,
+        catalog: PatternCatalog | None = None,
+        jacobian: RepairJacobian | None = None,
+    ):
+        self.catalog = catalog or PatternCatalog()
+        self.jacobian = jacobian
         self._failure_counts: dict[str, int] = {}
 
     def record_failure(self, fm_group: str) -> None:
@@ -332,44 +380,33 @@ class SkillEvolver:
     ) -> bool:
         return self._failure_counts.get(fm_group, 0) >= threshold
 
-    def evolve_skill(
+    def evolve_catalog(
         self,
         fm_group: str,
-        skill: BaseSkill,
         negatives: list[ReflectInsight],
-    ) -> Path | None:
-        """Generate an evolved version of the skill via tool-calling."""
-        try:
-            source = inspect.getsource(skill.__class__)
-            source_path_str = inspect.getsourcefile(skill.__class__)
-        except (OSError, TypeError):
-            return None
-        source_path = Path(source_path_str) if source_path_str else None
-
+    ) -> bool:
+        """Evolve the catalog via LLM tool-calling.  Returns True on success."""
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
 
         if loop and loop.is_running():
-            # We're inside an async context — schedule in a new thread
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 future = pool.submit(
                     asyncio.run,
-                    self._aevolve_skill(fm_group, source, negatives, source_path),
+                    self._aevolve_catalog(fm_group, negatives),
                 )
                 return future.result()
         else:
-            return asyncio.run(self._aevolve_skill(fm_group, source, negatives, source_path))
+            return asyncio.run(self._aevolve_catalog(fm_group, negatives))
 
-    async def _aevolve_skill(
+    async def _aevolve_catalog(
         self,
         fm_group: str,
-        source: str,
         negatives: list[ReflectInsight],
-        source_path: Path | None = None,
-    ) -> Path | None:
+    ) -> bool:
         failures_text = "\n".join(
             f"Round {i+1}: changes=[{', '.join(n.changes_attempted[:2])}] "
             f"FM {n.before_fm_rate:.2f}→{n.after_fm_rate:.2f}, "
@@ -378,56 +415,36 @@ class SkillEvolver:
             for i, n in enumerate(negatives[-20:])
         ) or "No specific failures recorded."
 
-        user_prompt = _EVOLVE_USER_PROMPT.format(
-            fm_group=fm_group,
-            n_failures=len(negatives),
-            failures_text=failures_text,
-        )
-
-        ctx = _SkillFileContext(source)
-        ctx.write_file("meta_context.md", _build_meta_context(
-            fm_group=fm_group,
-            source_path=source_path,
-            evolved_dir=self.evolved_dir,
-        ))
-        ctx.write_file("failure_summary.md", _build_failure_summary(negatives))
-        ctx.write_file(
+        ctx = _CatalogContext(self.catalog)
+        ctx._write_file("meta_context.md", _build_meta_context(fm_group))
+        ctx._write_file("failure_summary.md", _build_failure_summary(negatives))
+        ctx._write_file(
             "failures.json",
             json.dumps([asdict(neg) for neg in negatives], ensure_ascii=False, indent=2),
         )
+        # Jacobian experience report — pattern success rates + divergence data
+        if self.jacobian:
+            ctx._write_file("jacobian_report.md", self.jacobian.format_evolution_report(fm_group))
 
         final_msgs = await acall_llm_with_tools(
             messages=[
-                {"role": "system", "content": _EVOLVE_SYSTEM_PROMPT.format(
-                    max_turns=META_EVOLVE_MAX_TURNS,
-                    max_tokens=META_EVOLVE_MAX_TOKENS,
+                {"role": "system", "content": _EVOLVE_SYSTEM_PROMPT.format(fm_group=fm_group)},
+                {"role": "user", "content": _EVOLVE_USER_PROMPT.format(
+                    fm_group=fm_group,
+                    n_failures=len(negatives),
+                    failures_text=failures_text,
                 )},
-                {"role": "user", "content": user_prompt},
             ],
-            tools=_SKILL_TOOL_SCHEMAS,
+            tools=_CATALOG_TOOL_SCHEMAS,
             tool_executor=ctx.execute_tool,
             max_tokens=META_EVOLVE_MAX_TOKENS,
             max_turns=META_EVOLVE_MAX_TURNS,
         )
-        _persist_meta_tool_trace(
-            fm_group=fm_group,
-            source_path=source_path,
-            ctx=ctx,
-            final_msgs=final_msgs,
-            negatives=negatives,
-        )
 
-        # Validate final source
-        try:
-            compile(ctx.source, f"evolved_skill_{fm_group}.py", "exec")
-        except SyntaxError:
-            return None
+        _persist_trace(fm_group, ctx, final_msgs, negatives)
 
-        # Save
-        existing = sorted(self.evolved_dir.glob(f"skill_{fm_group}_v*.py"))
-        version = len(existing) + 1
-        out_path = self.evolved_dir / f"skill_{fm_group}_v{version}.py"
-        out_path.write_text(ctx.source, encoding="utf-8")
-
+        # Save updated catalog
+        self.catalog.save()
         self._failure_counts[fm_group] = 0
-        return out_path
+        print(f"    Catalog evolved and saved ({len(self.catalog)} patterns).")
+        return True

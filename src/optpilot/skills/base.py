@@ -35,7 +35,6 @@ from optpilot.models import (
     SkillResult,
 )
 from optpilot.repair_utils import extract_fenced_block, extract_preface, summarize_faults
-from optpilot.skills.subskills import SubSkillStore
 from optpilot.skills.tools import TOOL_SCHEMAS, ChangeRecord, ToolContext, dag_to_python, execute_tool
 
 if TYPE_CHECKING:
@@ -70,6 +69,7 @@ class BaseSkill(ABC):
         diagnoser: Diagnoser,
         budget: SkillBudget | None = None,
         prior_negatives: list[ReflectInsight] | None = None,
+        jacobian: Any | None = None,
     ) -> SkillResult:
         """Full repair workflow: outer reflection loop + inner convergence loop."""
 
@@ -105,9 +105,23 @@ class BaseSkill(ABC):
             analysis = self.analyze(current_dag, proposal_traces, proposal_profiles, negatives)
             budget.used_llm_calls += 1
 
+            # --- Jacobian: get recommended patterns ---
+            from optpilot.skills.repair_patterns import FailureSignature, dominant_signature, infer_observed_pattern
+            from optpilot.skills.jacobian import RepairOutcome
+
+            failure_sigs = getattr(analysis, "metadata", {}).get("failure_signatures", []) if hasattr(analysis, "metadata") else []
+            dom_sig = dominant_signature(failure_sigs) if failure_sigs else FailureSignature(fm_group=self.FM_GROUP, dag_component="other")
+            recommended_patterns: list[tuple] = []
+            if jacobian and dom_sig.fm_group:
+                recommended_patterns = jacobian.recommend(dom_sig)
+                if recommended_patterns:
+                    top_name = recommended_patterns[0][0].name
+                    print(f"    Jacobian top recommendation: {top_name}")
+
             # --- Inner loop: evolve until convergence ---
             evolve_history: list[EvolveResult] = []
             prev_fm_rate = self._fm_rate(proposal_profiles)
+            prev_pass_rate = self._pass_rate(proposal_traces)
             no_improve = 0
             latest_eval_traces: list[MASTrace] = []
             latest_eval_profiles: list[FMProfile] = []
@@ -116,7 +130,12 @@ class BaseSkill(ABC):
                 if not budget.check():
                     break
 
-                print(f"    Inner iter {inner_iter + 1}/{self.MAX_INNER_ITERS} (fm_rate={prev_fm_rate:.2f})")
+                # Select pattern for this iteration (round-robin)
+                cur_pattern = None
+                if inner_iter < len(recommended_patterns):
+                    cur_pattern = recommended_patterns[inner_iter][0]
+                pattern_label = cur_pattern.pattern_id if cur_pattern else "none"
+                print(f"    Inner iter {inner_iter + 1}/{self.MAX_INNER_ITERS} (fm_rate={prev_fm_rate:.2f}, pattern={pattern_label})")
 
                 result = self.evolve(current_dag, analysis, negatives, evolve_history)
                 evolve_history.append(result)
@@ -135,7 +154,25 @@ class BaseSkill(ABC):
                 budget.used_batch_runs += 1
 
                 fm_rate = self._fm_rate(new_profiles)
+                pass_rate = self._pass_rate(new_traces)
                 print(f"    → fm_rate={fm_rate:.2f}, change: {result.change_description[:80]}")
+
+                # Update Jacobian
+                if jacobian and dom_sig.fm_group and cur_pattern:
+                    fm_delta = fm_rate - prev_fm_rate
+                    pass_delta = pass_rate - prev_pass_rate
+                    observed = infer_observed_pattern(getattr(result, "change_records", []))
+                    outcome = RepairOutcome(
+                        fm_group=dom_sig.fm_group,
+                        dag_component=dom_sig.dag_component,
+                        agent=dom_sig.agent,
+                        assigned_pattern_id=cur_pattern.pattern_id,
+                        observed_pattern_id=observed,
+                        success=fm_delta < 0,
+                        fm_delta=fm_delta,
+                        pass_delta=pass_delta,
+                    )
+                    jacobian.update(outcome)
 
                 if fm_rate < self.CONVERGENCE_THRESHOLD:
                     print(f"    Converged (fm_rate < {self.CONVERGENCE_THRESHOLD})")
@@ -149,6 +186,7 @@ class BaseSkill(ABC):
                 else:
                     no_improve = 0
                 prev_fm_rate = fm_rate
+                prev_pass_rate = pass_rate
 
             total_inner += len(evolve_history)
 
@@ -299,8 +337,9 @@ class BaseSkill(ABC):
         budget: SkillBudget | None = None,
         prior_negatives: list[ReflectInsight] | None = None,
         concurrency: int = 256,
+        jacobian: Any | None = None,
     ) -> SkillResult:
-        """Async repair workflow with meta-evolution and sub-skill accumulation."""
+        """Async repair workflow with meta-evolution and Jacobian-guided repair."""
 
         budget = budget or SkillBudget()
         budget.start_time = time.time()
@@ -310,7 +349,6 @@ class BaseSkill(ABC):
         new_negatives: list[ReflectInsight] = []
         fm_info = GROUP_DEFINITIONS.get(self.FM_GROUP, {})
         fm_name = fm_info.get("name", self.FM_GROUP)
-        subskill_store = SubSkillStore()
         all_change_records: list[ChangeRecord] = []
 
         print(f"  [Skill-{self.FM_GROUP}] Starting repair for {fm_name}")
@@ -335,8 +373,22 @@ class BaseSkill(ABC):
             analysis = await self.aanalyze(current_dag, proposal_traces, proposal_profiles, negatives)
             budget.used_llm_calls += 1
 
+            # --- Jacobian: get recommended patterns ---
+            from optpilot.skills.repair_patterns import FailureSignature, dominant_signature, infer_observed_pattern
+            from optpilot.skills.jacobian import RepairOutcome
+
+            failure_sigs = getattr(analysis, "metadata", {}).get("failure_signatures", []) if hasattr(analysis, "metadata") else []
+            dom_sig = dominant_signature(failure_sigs) if failure_sigs else FailureSignature(fm_group=self.FM_GROUP, dag_component="other")
+            recommended_patterns: list[tuple] = []
+            if jacobian and dom_sig.fm_group:
+                recommended_patterns = jacobian.recommend(dom_sig)
+                if recommended_patterns:
+                    top_name = recommended_patterns[0][0].name
+                    print(f"    Jacobian top recommendation: {top_name}")
+
             evolve_history: list[EvolveResult] = []
             prev_fm_rate = self._fm_rate(proposal_profiles)
+            prev_pass_rate = self._pass_rate(proposal_traces)
             no_improve = 0
             latest_eval_traces: list[MASTrace] = []
             latest_eval_profiles: list[FMProfile] = []
@@ -345,9 +397,14 @@ class BaseSkill(ABC):
                 if not budget.check():
                     break
 
-                print(f"    Inner iter {inner_iter + 1}/{self.MAX_INNER_ITERS} (fm_rate={prev_fm_rate:.2f})")
+                # Select pattern for this iteration (round-robin)
+                cur_pattern = None
+                if inner_iter < len(recommended_patterns):
+                    cur_pattern = recommended_patterns[inner_iter][0]
+                pattern_label = cur_pattern.pattern_id if cur_pattern else "none"
+                print(f"    Inner iter {inner_iter + 1}/{self.MAX_INNER_ITERS} (fm_rate={prev_fm_rate:.2f}, pattern={pattern_label})")
 
-                result = await self.aevolve(current_dag, analysis, negatives, evolve_history)
+                result = await self.aevolve(current_dag, analysis, negatives, evolve_history, recommended_pattern=cur_pattern)
                 evolve_history.append(result)
                 current_dag = result.dag
                 all_change_records.extend(getattr(result, "change_records", []))
@@ -360,7 +417,25 @@ class BaseSkill(ABC):
                 budget.used_batch_runs += 1
 
                 fm_rate = self._fm_rate(new_profiles)
+                pass_rate = self._pass_rate(new_traces)
                 print(f"    → fm_rate={fm_rate:.2f}, change: {result.change_description[:80]}")
+
+                # Update Jacobian
+                if jacobian and dom_sig.fm_group and cur_pattern:
+                    fm_delta = fm_rate - prev_fm_rate
+                    pass_delta = pass_rate - prev_pass_rate
+                    observed = infer_observed_pattern(getattr(result, "change_records", []))
+                    outcome = RepairOutcome(
+                        fm_group=dom_sig.fm_group,
+                        dag_component=dom_sig.dag_component,
+                        agent=dom_sig.agent,
+                        assigned_pattern_id=cur_pattern.pattern_id,
+                        observed_pattern_id=observed,
+                        success=fm_delta < 0,
+                        fm_delta=fm_delta,
+                        pass_delta=pass_delta,
+                    )
+                    jacobian.update(outcome)
 
                 if fm_rate < self.CONVERGENCE_THRESHOLD:
                     print(f"    Converged (fm_rate < {self.CONVERGENCE_THRESHOLD})")
@@ -390,6 +465,7 @@ class BaseSkill(ABC):
                     no_improve = 0
                     consecutive_inner_failures = 0
                 prev_fm_rate = fm_rate
+                prev_pass_rate = pass_rate
 
             total_inner += len(evolve_history)
 
@@ -461,18 +537,6 @@ class BaseSkill(ABC):
             if self.judge(before_val_profiles, after_val_profiles,
                           before_val_traces, after_val_traces):
                 print(f"  [Skill-{self.FM_GROUP}] Repair validated!")
-
-                # Save as sub-skill
-                subskill = SubSkillStore.from_evolve_result(
-                    fm_group=self.FM_GROUP,
-                    change_records=all_change_records,
-                    root_causes=analysis.root_cause_clusters,
-                    before_fm=before_fm, after_fm=after_fm,
-                    before_pass=before_pass, after_pass=after_pass,
-                    summary=evolve_history[-1].change_description if evolve_history else "",
-                )
-                path = subskill_store.save(subskill)
-                print(f"  [Skill-{self.FM_GROUP}] Saved sub-skill: {path}")
 
                 return SkillResult(
                     success=True,
@@ -582,6 +646,7 @@ class BaseSkill(ABC):
     async def aevolve(
         self, dag: MASDAG, analysis: AnalysisResult,
         negatives: list[ReflectInsight], history: list[EvolveResult],
+        recommended_pattern: Any | None = None,
     ) -> EvolveResult:
         """Async evolve using tool-calling agent loop. Override in subclasses."""
         import asyncio
@@ -751,7 +816,6 @@ _MODELS_PATH = PROJECT_ROOT / "src/optpilot/models.py"
 _ARCHITECTURE_PATH = PROJECT_ROOT / "memory_bank/architecture.md"
 _PROJECT_GOAL_PATH = PROJECT_ROOT / "memory_bank/project_goal.md"
 _PROGRESS_PATH = PROJECT_ROOT / "memory_bank/progress.md"
-_SUBSKILLS_ROOT = LIBRARY_DIR / "subskills"
 _SKILL_AGENT_TRACE_ROOT = LIBRARY_DIR / "skill_agent_traces"
 
 
@@ -763,7 +827,6 @@ def _build_skill_context_index(
     trace_file_lines: list[str],
 ) -> str:
     negatives_path = NEGATIVES_DIR / f"negatives_{fm_group}.json"
-    subskills_path = _SUBSKILLS_ROOT / fm_group
     skill_agent_trace_path = _SKILL_AGENT_TRACE_ROOT / fm_group
     root_causes = ", ".join(analysis.root_cause_clusters) or "unknown"
     agents = ", ".join(analysis.common_agents) or "unknown"
@@ -800,7 +863,6 @@ def _build_skill_context_index(
         "",
         "## Persistent Experience",
         f"- {negatives_path}: accumulated failed repair reflections for this FM group",
-        f"- {subskills_path}: successful reusable repairs for this FM group",
         f"- {skill_agent_trace_path}: persisted skill-agent tool traces for this FM group",
         "",
         "Use bash (`cat`, `sed -n`, `rg`) to inspect these files before making edits.",
@@ -892,8 +954,8 @@ The following trace files show what went wrong at runtime. \
 Use `bash` to read them and understand the actual data flow:
 {trace_files}
 
-## Prior Successful Repairs (try these first if relevant)
-{subskills_text}
+## Recommended Repair Direction (from experience)
+{recommended_pattern_text}
 
 ## Modification History (this round)
 {history_text}
@@ -962,6 +1024,10 @@ class GenericSkill(BaseSkill):
             if loc and loc.dag_component and loc.dag_component != "other":
                 dag_components.add(loc.dag_component)
 
+        # Extract failure signatures for Jacobian-based recommendation
+        from optpilot.skills.repair_patterns import extract_failure_signatures
+        failure_signatures = extract_failure_signatures(self.FM_GROUP, profiles)
+
         return AnalysisResult(
             fm_id=self.FM_GROUP, fm_rate=self._fm_rate(profiles),
             common_agents=result.get("common_agents", []),
@@ -972,6 +1038,7 @@ class GenericSkill(BaseSkill):
             metadata={
                 "dag_components": sorted(dag_components),
                 "proposal_traces": traces,
+                "failure_signatures": failure_signatures,
             },
         )
 
@@ -992,6 +1059,7 @@ class GenericSkill(BaseSkill):
     async def aevolve(
         self, dag: MASDAG, analysis: AnalysisResult,
         negatives: list[ReflectInsight], history: list[EvolveResult],
+        recommended_pattern: Any | None = None,
     ) -> EvolveResult:
         """Async evolve via tool-calling agent loop."""
         fm_info = GROUP_DEFINITIONS[self.FM_GROUP]
@@ -1030,7 +1098,16 @@ class GenericSkill(BaseSkill):
                 trace_file_lines=trace_file_lines,
             ))
 
-        subskill_store = SubSkillStore()
+        # Build recommended pattern text
+        recommended_pattern_text = "No specific recommendation. Use your best judgment."
+        if recommended_pattern is not None:
+            recommended_pattern_text = (
+                f"**{recommended_pattern.name}** (pattern: {recommended_pattern.pattern_id})\n"
+                f"{recommended_pattern.description}\n"
+                f"This repair direction has been effective for similar failures. "
+                f"Prioritize this approach, but use your judgment if the evidence suggests otherwise."
+            )
+
         user_prompt = _EVOLVE_USER_PROMPT.format(
             fm_name=fm_info["name"],
             fm_description=fm_info["description"],
@@ -1040,7 +1117,7 @@ class GenericSkill(BaseSkill):
             steps=", ".join(analysis.common_steps) or "unknown",
             dag_components=", ".join(analysis.metadata.get("dag_components", [])) or "unknown",
             trace_files="\n".join(trace_file_lines),
-            subskills_text=subskill_store.format_for_prompt(self.FM_GROUP),
+            recommended_pattern_text=recommended_pattern_text,
             history_text=self.format_history(history),
             negatives_text=self.format_negatives(negatives),
             context_file=os.path.basename(context_file),
@@ -1100,6 +1177,7 @@ class GenericSkill(BaseSkill):
                 "tool_trace_path": tool_trace_path,
                 "invalid_evolve_reason": invalid_evolve_reason,
                 "final_assistant_summary_valid": not bool(invalid_evolve_reason),
+                "assigned_pattern_id": recommended_pattern.pattern_id if recommended_pattern else "",
             },
         )
 

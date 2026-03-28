@@ -207,7 +207,7 @@ class AnalysisResult:
 
 @dataclass
 class SkillResult:
-    """Return value of BaseSkill.run()."""
+    """Return value of a repair round."""
 
     success: bool
     fm_id: str

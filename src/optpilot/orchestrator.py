@@ -1,28 +1,40 @@
-"""Orchestrator — controls the online optimization loop.
+"""Orchestrator — Jacobian-driven single repair loop.
 
-Coordinates: Runner → Diagnoser → dispatch to Skill Workflows (parallel).
+Each round: run → diagnose → Jacobian recommend → evolve → evaluate → update.
 """
 
 from __future__ import annotations
 
-import asyncio
-import copy
 import json
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import TypeVar
+from typing import Any
 
 from optpilot.config import LIBRARY_DIR
 from optpilot.dag.core import MASDAG
-from optpilot.data.fm_taxonomy_6group import GROUP_NAMES
-from optpilot.models import FMLabel, FMProfile, FMLocalization, MASTrace, SkillBudget, SkillResult
+from optpilot.data.fm_taxonomy_6group import GROUP_IDS, GROUP_NAMES
+from optpilot.models import FMLabel, FMLocalization, FMProfile, MASTrace, SkillBudget, SkillResult
 from optpilot.modules.base_runner import MASRunner
 from optpilot.modules.diagnoser import Diagnoser
-from optpilot.skills.evolution import SkillEvolver
-from optpilot.skills.forger import forge
+from optpilot.skills.evolution import CatalogEvolver
+from optpilot.skills.jacobian import RepairJacobian, RepairOutcome
 from optpilot.skills.negatives import NegativesStore
-from optpilot.skills.registry import get_skill, load_evolved_skill
+from optpilot.skills.repair_loop import (
+    aevolve,
+    analyze,
+    build_synthetic_insight,
+    fm_rate,
+    format_negatives,
+    has_material_change,
+    pass_rate,
+    reflect,
+)
+from optpilot.skills.repair_patterns import (
+    PatternCatalog,
+    dominant_signature,
+    extract_failure_signatures,
+    FailureSignature,
+)
 from optpilot.tracking import Tracker
 
 
@@ -46,11 +58,33 @@ def rank_fm_groups(
     return eligible
 
 
-T = TypeVar("T")
+def fitness_score(
+    traces: list[MASTrace],
+    profiles: list[FMProfile],
+    num_agents: int,
+) -> float:
+    """MAST-blog fitness: mean of per-task scores.
 
-
-def _take_by_index(items: list[T], indices: list[int]) -> list[T]:
-    return [items[i] for i in indices]
+    per_task = 1/(1+trace_failures) * (1.2 if correct) - 0.01*(agents-4 if >4)
+    """
+    if not traces:
+        return 0.0
+    scores: list[float] = []
+    for i, trace in enumerate(traces):
+        is_correct = bool(trace.task_score and trace.task_score > 0)
+        trace_failures = 0
+        if i < len(profiles):
+            trace_failures = sum(
+                1 for gid in GROUP_IDS
+                if gid in profiles[i].labels and profiles[i].labels[gid].present
+            )
+        s = 1.0 / (1.0 + trace_failures)
+        if is_correct:
+            s *= 1.2
+        if num_agents > 4:
+            s -= 0.01 * (num_agents - 4)
+        scores.append(max(0.0, s))
+    return sum(scores) / len(scores)
 
 
 def _save_dag_if_possible(dag: object, path: str | Path) -> str:
@@ -59,10 +93,6 @@ def _save_dag_if_possible(dag: object, path: str | Path) -> str:
         dag.save(path_obj)
         return str(path_obj)
     return ""
-
-
-def _task_dir_index(path: Path) -> int:
-    return int(path.name.split("_", 1)[1])
 
 
 def _trace_to_dict(trace) -> dict[str, object]:
@@ -144,30 +174,12 @@ def _write_json(path: str | Path, data: object) -> str:
     return str(path_obj)
 
 
-def split_proposal_validation_indices(
-    target_fm: str,
-    profiles: list[FMProfile],
-    batch_size: int = 5,
-) -> tuple[list[int], list[int]] | None:
-    """Split traces with target FM into proposal (5) and validation (5).
-
-    Both sets only contain traces that exhibit the target FM.
-    """
-    matched_indices = [i for i, profile in enumerate(profiles) if target_fm in profile.active_fm_ids()]
-    if len(matched_indices) < 2 * batch_size:
-        # Not enough traces — use what we have, at least 1 per side
-        if len(matched_indices) < 2:
-            return None
-        half = len(matched_indices) // 2
-        return matched_indices[:half], matched_indices[half:]
-
-    proposal_indices = matched_indices[:batch_size]
-    validation_indices = matched_indices[batch_size: 2 * batch_size]
-    return proposal_indices, validation_indices
+def _task_dir_index(path: Path) -> int:
+    return int(path.name.split("_", 1)[1])
 
 
 class Orchestrator:
-    """Online optimization loop controller — dispatches to Skill Workflows."""
+    """Jacobian-driven single repair loop."""
 
     def __init__(
         self,
@@ -175,16 +187,504 @@ class Orchestrator:
         dag: MASDAG,
         use_wandb: bool = False,
         negatives_dir: str | Path | None = None,
-        evolved_dir: str | Path | None = None,
-        parallel: bool = True,
     ):
         self.runner = runner
         self.dag = dag
         self.diagnoser = Diagnoser()
         self.tracker = Tracker("skill_optimization", use_wandb=use_wandb)
         self.negatives_store = NegativesStore(Path(negatives_dir or LIBRARY_DIR / "negatives"))
-        self.evolver = SkillEvolver(Path(evolved_dir or LIBRARY_DIR / "evolved_skills"))
-        self.parallel = parallel
+        self.catalog = PatternCatalog()
+        self.jacobian = RepairJacobian(catalog=self.catalog)
+        self.evolver = CatalogEvolver(catalog=self.catalog, jacobian=self.jacobian)
+
+    # ---------------------------------------------------------------- #
+    #  Main optimization loop                                           #
+    # ---------------------------------------------------------------- #
+
+    async def aoptimize(
+        self,
+        tasks: list[str],
+        max_rounds: int = 10,
+        target_fm: str | None = None,
+        budget: SkillBudget | None = None,
+        concurrency: int = 256,
+        trace_output_base: str | Path | None = None,
+        dag_output_base: str | Path | None = None,
+        eval_tasks_per_round: int | None = None,
+    ) -> dict:
+        """Single-loop optimization: diagnose → recommend → evolve → evaluate.
+
+        Each round targets the most severe FM group, applies one Jacobian-
+        recommended repair pattern, evaluates the candidate once on a fixed
+        online eval set, and updates the matrix.
+
+        If *eval_tasks_per_round* is set, use the same fixed prefix subset for
+        every round (aligned with the OpenEvolve baseline evaluator).
+        """
+        current_dag = self.dag
+        budget = budget or SkillBudget()
+
+        eval_label = (
+            f"{eval_tasks_per_round} sampled per round"
+            if eval_tasks_per_round else "all"
+        )
+        print("=== OptPilot Jacobian-Driven Optimization ===")
+        print(f"Tasks: {len(tasks)} (eval: {eval_label}), Max rounds: {max_rounds}")
+        print()
+
+        results: list[dict] = []
+        dag_versions: list[dict[str, str | int]] = []
+        if dag_output_base:
+            initial_path = _save_dag_if_possible(current_dag, Path(dag_output_base) / "initial.yaml")
+            if initial_path:
+                dag_versions.append({"stage": "initial", "path": initial_path})
+
+        # Fixed online evaluation set, matching the OpenEvolve-style protocol.
+        if eval_tasks_per_round and eval_tasks_per_round < len(tasks):
+            eval_tasks = tasks[:eval_tasks_per_round]
+        else:
+            eval_tasks = tasks
+
+        print(f"Initial incumbent evaluation on {len(eval_tasks)} task(s)...")
+        incumbent_trace_dir = (
+            Path(trace_output_base) / "round_0"
+            if trace_output_base else None
+        )
+        incumbent_traces = await self.runner.arun_batch(
+            eval_tasks,
+            dag=current_dag,
+            output_base=incumbent_trace_dir,
+            max_concurrency=concurrency,
+        )
+        incumbent_profiles = await self.diagnoser.aclassify_batch(incumbent_traces)
+        incumbent_score = fitness_score(
+            incumbent_traces,
+            incumbent_profiles,
+            len(current_dag.agent_nodes),
+        )
+        budget.used_batch_runs += 1
+        print(f"  Incumbent fitness: {incumbent_score:.4f}")
+        print()
+
+        for round_i in range(max_rounds):
+            print(f"=== Round {round_i + 1}/{max_rounds} ===")
+
+            round_trace_dir = (
+                Path(trace_output_base) / f"round_{round_i + 1}"
+                if trace_output_base else None
+            )
+            round_dag_dir = (
+                Path(dag_output_base) / f"round_{round_i + 1}"
+                if dag_output_base else None
+            )
+
+            # 1. Extract dominant failure from the cached incumbent eval.
+            traces = incumbent_traces
+            profiles = incumbent_profiles
+            fm_ranking = rank_fm_groups(profiles, target_fm)
+            if not fm_ranking:
+                print("  No active FM groups. Optimization complete!")
+                break
+
+            top_fm, top_count = fm_ranking[0]
+            fm_name = GROUP_NAMES.get(top_fm, top_fm)
+            print(f"  Active: {', '.join(f'{fid}({c})' for fid, c in fm_ranking)}")
+            print(f"  Targeting: Group-{top_fm} ({fm_name}), count={top_count}")
+
+            # Extract failure signature for Jacobian
+            failure_sigs = extract_failure_signatures(top_fm, profiles)
+            dom_sig = dominant_signature(failure_sigs) if failure_sigs else FailureSignature(
+                fm_group=top_fm, dag_component="other",
+            )
+
+            # 2. Jacobian recommend
+            recommended = self.jacobian.recommend(dom_sig, top_k=1)
+            pattern = recommended[0][0] if recommended else None
+            pattern_label = pattern.pattern_id if pattern else "none"
+            if pattern:
+                print(f"  Jacobian recommendation: {pattern.name} ({pattern.pattern_id})")
+
+            # Load negatives for this FM group
+            negatives = self.negatives_store.load(top_fm)
+
+            # 3. Analyze + Evolve
+            print(f"  [1/3] Analyzing + evolving (pattern={pattern_label})...")
+            analysis = analyze(current_dag, top_fm, traces, profiles, negatives)
+            budget.used_llm_calls += 1
+
+            evolve_result = await aevolve(
+                current_dag, top_fm, analysis, negatives, [],
+                recommended_pattern=pattern,
+                traces=traces,
+                profiles=profiles,
+            )
+            budget.used_llm_calls += 1
+
+            # Check for invalid evolve
+            invalid_reason = evolve_result.metadata.get("invalid_evolve_reason", "")
+            if invalid_reason:
+                print(f"  Invalid evolve: {invalid_reason[:120]}")
+                insight = build_synthetic_insight(
+                    fm_group=top_fm,
+                    evolve_result=evolve_result,
+                    before_fm=fm_rate(top_fm, profiles),
+                    after_fm=fm_rate(top_fm, profiles),
+                    before_pass=pass_rate(traces),
+                    after_pass=pass_rate(traces),
+                    failure_reason=invalid_reason,
+                    lesson="Ensure evolve completes with a valid summary after edits.",
+                )
+                self.negatives_store.extend(top_fm, [insight])
+                self.evolver.record_failure(top_fm)
+                results.append(self._round_entry(round_i, top_fm, False, evolve_result))
+                self._maybe_catalog_evolve(top_fm)
+                continue
+
+            # Check for material change
+            if not has_material_change(current_dag, evolve_result.dag, evolve_result):
+                print("  No material DAG change, skipping evaluation.")
+                insight = build_synthetic_insight(
+                    fm_group=top_fm,
+                    evolve_result=evolve_result,
+                    before_fm=fm_rate(top_fm, profiles),
+                    after_fm=fm_rate(top_fm, profiles),
+                    before_pass=pass_rate(traces),
+                    after_pass=pass_rate(traces),
+                    failure_reason="No concrete DAG change was applied.",
+                    lesson="Require at least one concrete code change before evaluating.",
+                )
+                self.negatives_store.extend(top_fm, [insight])
+                self.evolver.record_failure(top_fm)
+                results.append(self._round_entry(round_i, top_fm, False, evolve_result))
+                self._maybe_catalog_evolve(top_fm)
+                continue
+
+            # 4. Evaluate candidate once on the fixed online eval set.
+            print(f"  [2/3] Evaluating candidate DAG on {len(eval_tasks)} tasks...")
+            new_traces = await self.runner.arun_batch(
+                eval_tasks,
+                dag=evolve_result.dag,
+                output_base=round_trace_dir,
+                max_concurrency=concurrency,
+            )
+            new_profiles = await self.diagnoser.aclassify_batch(new_traces)
+            budget.used_batch_runs += 1
+
+            before_fm_val = fm_rate(top_fm, profiles)
+            after_fm_val = fm_rate(top_fm, new_profiles)
+            before_pass_val = pass_rate(traces)
+            after_pass_val = pass_rate(new_traces)
+
+            num_agents_after = len(evolve_result.dag.agent_nodes)
+            before_fitness = incumbent_score
+            after_fitness = fitness_score(new_traces, new_profiles, num_agents_after)
+            improved = after_fitness > before_fitness
+
+            print(f"  Fitness: {before_fitness:.4f} → {after_fitness:.4f}  "
+                  f"FM-{top_fm}: {before_fm_val:.2f} → {after_fm_val:.2f}  "
+                  f"pass: {before_pass_val:.3f} → {after_pass_val:.3f}")
+
+            # 6. Update Jacobian
+            if pattern:
+                observed = str(evolve_result.metadata.get("observed_pattern_id", ""))
+                outcome = RepairOutcome(
+                    fm_group=dom_sig.fm_group,
+                    dag_component=dom_sig.dag_component,
+                    agent=dom_sig.agent,
+                    assigned_pattern_id=pattern.pattern_id,
+                    observed_pattern_id=observed,
+                    success=improved,
+                    fm_delta=after_fm_val - before_fm_val,
+                    pass_delta=after_pass_val - before_pass_val,
+                )
+                self.jacobian.update(outcome)
+
+            # 7. Adopt or reflect
+            if improved:
+                current_dag = evolve_result.dag
+                self.dag = current_dag
+                incumbent_traces = new_traces
+                incumbent_profiles = new_profiles
+                incumbent_score = after_fitness
+                self.evolver.reset_failures(top_fm)
+                print(f"  [3/3] IMPROVED — adopting new DAG.")
+
+                if round_dag_dir:
+                    dag_path = _save_dag_if_possible(
+                        current_dag, round_dag_dir / "improved.yaml",
+                    )
+                    if dag_path:
+                        dag_versions.append({
+                            "stage": "improved",
+                            "round": round_i + 1,
+                            "fm_id": top_fm,
+                            "path": dag_path,
+                        })
+
+                results.append(self._round_entry(
+                    round_i, top_fm, True, evolve_result,
+                    final_fm_rate=after_fm_val, final_pass_rate=after_pass_val,
+                        final_fitness=after_fitness,
+                ))
+            else:
+                print(f"  [3/3] No improvement, reflecting...")
+                insight = reflect(
+                    top_fm, current_dag, evolve_result,
+                    before_fm_val, after_fm_val, before_pass_val, after_pass_val,
+                )
+                self.negatives_store.extend(top_fm, [insight])
+                self.evolver.record_failure(top_fm)
+                print(f"    Lesson: {insight.lesson[:120]}")
+
+                results.append(self._round_entry(
+                    round_i, top_fm, False, evolve_result,
+                    final_fm_rate=after_fm_val, final_pass_rate=after_pass_val,
+                    final_fitness=after_fitness,
+                ))
+
+                self._maybe_catalog_evolve(top_fm)
+
+            print()
+
+        # Save final state
+        if dag_output_base:
+            final_path = _save_dag_if_possible(current_dag, Path(dag_output_base) / "final.yaml")
+            if final_path:
+                dag_versions.append({"stage": "final", "path": final_path})
+
+        self.jacobian.save()
+        print(f"  Jacobian saved. {self.jacobian.format_matrix_summary()}")
+
+        summary = {
+            "total_rounds": len(results),
+            "results": results,
+            "dag_versions": dag_versions,
+        }
+        self.tracker.save_local("skill_optimization.json")
+        return summary
+
+    # ---------------------------------------------------------------- #
+    #  Warm-start variants                                              #
+    # ---------------------------------------------------------------- #
+
+    async def aoptimize_from_traces(
+        self,
+        tasks: list[str],
+        trace_base: str | Path,
+        target_fm: str | None = None,
+        budget: SkillBudget | None = None,
+        concurrency: int = 256,
+        trace_output_base: str | Path | None = None,
+        dag_output_base: str | Path | None = None,
+    ) -> dict:
+        """Warm-start: load persisted traces, re-diagnose, then run one repair round."""
+        print("=== OptPilot Warm Start (from traces) ===")
+        print(f"Tasks: {len(tasks)}, Trace source: {trace_base}")
+        print()
+
+        traces = self._load_persisted_traces(trace_base, tasks)
+        profiles = await self.diagnoser.aclassify_batch(traces)
+
+        return await self._run_single_repair_round(
+            tasks, traces, profiles,
+            target_fm=target_fm,
+            budget=budget,
+            concurrency=concurrency,
+            dag_output_base=dag_output_base,
+        )
+
+    async def aoptimize_from_diagnose(
+        self,
+        tasks: list[str],
+        diagnose_dir: str | Path,
+        target_fm: str | None = None,
+        budget: SkillBudget | None = None,
+        concurrency: int = 256,
+        dag_output_base: str | Path | None = None,
+    ) -> dict:
+        """Warm-start: load persisted diagnose artifacts, then run one repair round."""
+        print("=== OptPilot Warm Start (from diagnose) ===")
+        print(f"Tasks: {len(tasks)}, Diagnose source: {diagnose_dir}")
+        print()
+
+        traces, profiles, _, _ = self._load_persisted_diagnosis(
+            diagnose_dir=diagnose_dir, tasks=tasks, target_fm=target_fm,
+        )
+
+        return await self._run_single_repair_round(
+            tasks, traces, profiles,
+            target_fm=target_fm,
+            budget=budget,
+            concurrency=concurrency,
+            dag_output_base=dag_output_base,
+        )
+
+    async def _run_single_repair_round(
+        self,
+        tasks: list[str],
+        traces: list,
+        profiles: list[FMProfile],
+        target_fm: str | None = None,
+        budget: SkillBudget | None = None,
+        concurrency: int = 256,
+        dag_output_base: str | Path | None = None,
+    ) -> dict:
+        """Run one analyze → evolve → evaluate round using pre-loaded traces/profiles."""
+        current_dag = self.dag
+        budget = budget or SkillBudget()
+        results: list[dict] = []
+        dag_versions: list[dict[str, str | int]] = []
+
+        fm_ranking = rank_fm_groups(profiles, target_fm)
+        if not fm_ranking:
+            print("  No active FM groups. Done!")
+            return {"total_rounds": 0, "results": [], "dag_versions": dag_versions}
+
+        top_fm, top_count = fm_ranking[0]
+        fm_name = GROUP_NAMES.get(top_fm, top_fm)
+        print(f"  Active: {', '.join(f'{fid}({c})' for fid, c in fm_ranking)}")
+        print(f"  Targeting: Group-{top_fm} ({fm_name})")
+
+        failure_sigs = extract_failure_signatures(top_fm, profiles)
+        dom_sig = dominant_signature(failure_sigs) if failure_sigs else FailureSignature(
+            fm_group=top_fm, dag_component="other",
+        )
+
+        recommended = self.jacobian.recommend(dom_sig, top_k=1)
+        pattern = recommended[0][0] if recommended else None
+        if pattern:
+            print(f"  Jacobian recommendation: {pattern.name}")
+
+        negatives = self.negatives_store.load(top_fm)
+
+        print("  Analyzing + evolving...")
+        analysis = analyze(current_dag, top_fm, traces, profiles, negatives)
+        evolve_result = await aevolve(
+            current_dag, top_fm, analysis, negatives, [],
+            recommended_pattern=pattern,
+            traces=traces,
+            profiles=profiles,
+        )
+
+        invalid_reason = evolve_result.metadata.get("invalid_evolve_reason", "")
+        if invalid_reason or not has_material_change(current_dag, evolve_result.dag, evolve_result):
+            reason = invalid_reason or "No material DAG change."
+            print(f"  Failed: {reason[:120]}")
+            insight = build_synthetic_insight(
+                fm_group=top_fm, evolve_result=evolve_result,
+                before_fm=fm_rate(top_fm, profiles), after_fm=fm_rate(top_fm, profiles),
+                before_pass=pass_rate(traces), after_pass=pass_rate(traces),
+                failure_reason=reason, lesson="Ensure concrete repairs are applied.",
+            )
+            self.negatives_store.extend(top_fm, [insight])
+            self.evolver.record_failure(top_fm)
+            results.append(self._round_entry(0, top_fm, False, evolve_result))
+        else:
+            print("  Evaluating repaired DAG...")
+            new_traces = await self.runner.arun_batch(
+                tasks, dag=evolve_result.dag, max_concurrency=concurrency,
+            )
+            new_profiles = await self.diagnoser.aclassify_batch(new_traces)
+
+            before_fm_val = fm_rate(top_fm, profiles)
+            after_fm_val = fm_rate(top_fm, new_profiles)
+            before_pass_val = pass_rate(traces)
+            after_pass_val = pass_rate(new_traces)
+
+            num_agents_before = len(current_dag.agent_nodes)
+            num_agents_after = len(evolve_result.dag.agent_nodes)
+            before_fitness = fitness_score(traces, profiles, num_agents_before)
+            after_fitness = fitness_score(new_traces, new_profiles, num_agents_after)
+            improved = after_fitness > before_fitness
+
+            print(f"  Fitness: {before_fitness:.4f} → {after_fitness:.4f}  "
+                  f"FM-{top_fm}: {before_fm_val:.2f} → {after_fm_val:.2f}  "
+                  f"pass: {before_pass_val:.3f} → {after_pass_val:.3f}")
+
+            if pattern:
+                observed = str(evolve_result.metadata.get("observed_pattern_id", ""))
+                self.jacobian.update(RepairOutcome(
+                    fm_group=dom_sig.fm_group, dag_component=dom_sig.dag_component,
+                    agent=dom_sig.agent, assigned_pattern_id=pattern.pattern_id,
+                    observed_pattern_id=observed, success=improved,
+                    fm_delta=after_fm_val - before_fm_val,
+                    pass_delta=after_pass_val - before_pass_val,
+                ))
+
+            if improved:
+                current_dag = evolve_result.dag
+                self.dag = current_dag
+                self.evolver.reset_failures(top_fm)
+                print("  IMPROVED — adopting new DAG.")
+                results.append(self._round_entry(
+                    0, top_fm, True, evolve_result,
+                    final_fm_rate=after_fm_val, final_pass_rate=after_pass_val,
+                    final_fitness=after_fitness,
+                ))
+                if dag_output_base:
+                    p = _save_dag_if_possible(current_dag, Path(dag_output_base) / "improved.yaml")
+                    if p:
+                        dag_versions.append({"stage": "improved", "path": p})
+            else:
+                insight = reflect(
+                    top_fm, current_dag, evolve_result,
+                    before_fm_val, after_fm_val, before_pass_val, after_pass_val,
+                )
+                self.negatives_store.extend(top_fm, [insight])
+                self.evolver.record_failure(top_fm)
+                print(f"  No improvement. Lesson: {insight.lesson[:120]}")
+                results.append(self._round_entry(
+                    0, top_fm, False, evolve_result,
+                    final_fm_rate=after_fm_val, final_pass_rate=after_pass_val,
+                    final_fitness=after_fitness,
+                ))
+
+        if dag_output_base:
+            final_path = _save_dag_if_possible(current_dag, Path(dag_output_base) / "final.yaml")
+            if final_path:
+                dag_versions.append({"stage": "final", "path": final_path})
+
+        self.jacobian.save()
+        self.tracker.save_local("skill_optimization.json")
+        return {"total_rounds": 1, "results": results, "dag_versions": dag_versions}
+
+    # ---------------------------------------------------------------- #
+    #  Helpers                                                          #
+    # ---------------------------------------------------------------- #
+
+    def _round_entry(
+        self,
+        round_i: int,
+        fm_id: str,
+        success: bool,
+        evolve_result: Any = None,
+        final_fm_rate: float = 1.0,
+        final_pass_rate: float = 0.0,
+        final_fitness: float | None = None,
+    ) -> dict:
+        fm_name = GROUP_NAMES.get(fm_id, fm_id)
+        entry = {
+            "round": round_i + 1,
+            "fm_id": fm_id,
+            "fm_name": fm_name,
+            "success": success,
+            "final_fm_rate": final_fm_rate,
+            "final_pass_rate": final_pass_rate,
+            "final_fitness": final_fitness,
+        }
+        self.tracker.log(entry, step=round_i)
+        return entry
+
+    def _maybe_catalog_evolve(self, fm_group: str) -> None:
+        """Trigger catalog meta-evolution if failure threshold reached."""
+        if self.evolver.should_evolve(fm_group):
+            print(f"  Triggering catalog meta-evolution for Group-{fm_group}...")
+            all_neg = self.negatives_store.load(fm_group)
+            self.evolver.evolve_catalog(fm_group, all_neg)
+
+    # ---------------------------------------------------------------- #
+    #  Persistence loaders (warm-start)                                 #
+    # ---------------------------------------------------------------- #
 
     def _load_persisted_traces(
         self,
@@ -241,66 +741,12 @@ class Orchestrator:
             )
         return loaded  # type: ignore[return-value]
 
-    def _persist_diagnosis_artifacts(
-        self,
-        output_dir: str | Path,
-        traces: list,
-        profiles: list[FMProfile],
-        fm_ranking: list[tuple[str, int]],
-        skill_jobs: list[dict] | None = None,
-        source_trace_base: str | Path | None = None,
-    ) -> dict[str, str]:
-        base = Path(output_dir)
-        base.mkdir(parents=True, exist_ok=True)
-
-        trace_entries: list[dict[str, object]] = []
-        grouped_entries: dict[str, list[dict[str, object]]] = {}
-        for idx, (trace, profile) in enumerate(zip(traces, profiles)):
-            entry = {
-                "task_index": idx,
-                **_trace_to_dict(trace),
-                **_profile_to_dict(profile),
-            }
-            trace_entries.append(entry)
-            for fm_id in profile.active_fm_ids():
-                grouped_entries.setdefault(fm_id, []).append(entry)
-
-        summary = {
-            "n_traces": len(traces),
-            "fm_ranking": [{"fm_id": fm_id, "count": count} for fm_id, count in fm_ranking],
-            "source_trace_base": str(source_trace_base) if source_trace_base else "",
-        }
-        written = {
-            "summary": _write_json(base / "summary.json", summary),
-            "profiles": _write_json(base / "profiles.json", trace_entries),
-        }
-
-        fm_group_dir = base / "fm_groups"
-        for fm_id, entries in grouped_entries.items():
-            _write_json(fm_group_dir / f"{fm_id}.json", entries)
-
-        if skill_jobs is not None:
-            job_dir = base / "skill_jobs"
-            for job in skill_jobs:
-                proposal_idx = job["proposal_idx"]
-                validation_idx = job["validation_idx"]
-                payload = {
-                    "fm_id": job["fm_id"],
-                    "proposal_idx": proposal_idx,
-                    "validation_idx": validation_idx,
-                    "proposal_traces": [trace_entries[i] for i in proposal_idx],
-                    "validation_traces": [trace_entries[i] for i in validation_idx],
-                }
-                _write_json(job_dir / f"{job['fm_id']}.json", payload)
-
-        return written
-
     def _load_persisted_diagnosis(
         self,
         diagnose_dir: str | Path,
         tasks: list[str],
         target_fm: str | None = None,
-    ) -> tuple[list[MASTrace], list[FMProfile], list[dict], list[tuple[str, int]]]:
+    ) -> tuple[list, list[FMProfile], list[dict], list[tuple[str, int]]]:
         base = Path(diagnose_dir)
         if not base.exists():
             raise FileNotFoundError(f"Persisted diagnose directory does not exist: {base}")
@@ -326,7 +772,9 @@ class Orchestrator:
                 raise ValueError(f"Persisted diagnose entry missing trace_path for task index {idx}")
             trace_file = Path(trace_path)
             if not trace_file.exists():
-                raise FileNotFoundError(f"Persisted trace file referenced by diagnose artifacts is missing: {trace_file}")
+                raise FileNotFoundError(
+                    f"Persisted trace file referenced by diagnose artifacts is missing: {trace_file}"
+                )
 
             traces[idx] = MASTrace(
                 trace_id=int(raw.get("trace_id", idx)),
@@ -357,768 +805,14 @@ class Orchestrator:
                 summary_data = loaded
 
         summary_ranking = summary_data.get("fm_ranking", [])
-        fm_ranking = [
+        fm_ranking_list = [
             (str(item.get("fm_id", "")), int(item.get("count", 0)))
             for item in summary_ranking
             if isinstance(item, dict) and item.get("fm_id")
         ]
         if target_fm:
-            fm_ranking = [item for item in fm_ranking if item[0] == target_fm]
-        if not fm_ranking:
-            fm_ranking = rank_fm_groups(profiles, target_fm)
-
-        skill_jobs_dir = base / "skill_jobs"
-        skill_jobs: list[dict] = []
-        if skill_jobs_dir.exists():
-            for job_path in sorted(skill_jobs_dir.glob("*.json")):
-                payload = json.loads(job_path.read_text(encoding="utf-8"))
-                if not isinstance(payload, dict):
-                    continue
-                fm_id = str(payload.get("fm_id", ""))
-                if not fm_id:
-                    continue
-                if target_fm and fm_id != target_fm:
-                    continue
-                skill_jobs.append({
-                    "fm_id": fm_id,
-                    "proposal_idx": [int(i) for i in payload.get("proposal_idx", [])],
-                    "validation_idx": [int(i) for i in payload.get("validation_idx", [])],
-                    "prior_negatives": self.negatives_store.load(fm_id),
-                })
-
-        if not skill_jobs:
-            for fm_id, _count in fm_ranking:
-                split = split_proposal_validation_indices(fm_id, profiles)
-                if split is None:
-                    continue
-                proposal_idx, validation_idx = split
-                skill_jobs.append({
-                    "fm_id": fm_id,
-                    "proposal_idx": proposal_idx,
-                    "validation_idx": validation_idx,
-                    "prior_negatives": self.negatives_store.load(fm_id),
-                })
-
-        return traces, profiles, skill_jobs, fm_ranking
-
-    def optimize(
-        self,
-        tasks: list[str],
-        max_rounds: int = 5,
-        target_fm: str | None = None,
-        budget: SkillBudget | None = None,
-    ) -> dict:
-        """Run the full online optimization loop with Skill Workflows.
-
-        Skills for different FM groups can run in parallel since they each
-        work on independent copies of the DAG.
-        """
-        current_dag = self.dag
-
-        print(f"=== OptPilot Skill Workflow Optimization ===")
-        print(f"Tasks: {len(tasks)}, Max rounds: {max_rounds}, Parallel: {self.parallel}")
-        print()
-
-        results: list[dict] = []
-
-        for round_i in range(max_rounds):
-            print(f"=== Round {round_i + 1}/{max_rounds} ===")
-
-            # 1. Run MAS + Diagnose
-            print(f"  [1/2] Running MAS on {len(tasks)} tasks + diagnosing...")
-            traces = self.runner.run_batch(tasks, dag=current_dag)
-            profiles = self.diagnoser.diagnose_batch(traces)
-
-            # 2. Rank FM groups
-            fm_ranking = rank_fm_groups(profiles, target_fm)
-            if not fm_ranking:
-                print(f"  No active FM groups with ≥2 traces. Done!")
-                break
-
-            print(f"  Active FM groups: {', '.join(f'{fid}({c})' for fid, c in fm_ranking)}")
-
-            # 3. Prepare skill dispatches
-            skill_jobs: list[dict] = []
-            for fm_id, _fm_count in fm_ranking:
-                split = split_proposal_validation_indices(fm_id, profiles)
-                if split is None:
-                    print(f"  Skipping Group-{fm_id}: cannot split proposal/validation.")
-                    continue
-
-                proposal_idx, validation_idx = split
-                prior_negatives = self.negatives_store.load(fm_id)
-
-                skill_jobs.append({
-                    "fm_id": fm_id,
-                    "proposal_idx": proposal_idx,
-                    "validation_idx": validation_idx,
-                    "prior_negatives": prior_negatives,
-                })
-
-            if not skill_jobs:
-                print(f"  No dispatchable skills. Done!")
-                break
-
-            # 4. Dispatch skills (parallel or sequential)
-            if self.parallel and len(skill_jobs) > 1:
-                skill_results = self._run_parallel(
-                    skill_jobs, current_dag, tasks, traces, profiles, budget,
-                )
-            else:
-                skill_results = self._run_sequential(
-                    skill_jobs, current_dag, tasks, traces, profiles, budget,
-                )
-
-            # 5. Collect results — pick the best successful skill
-            best_result: SkillResult | None = None
-            for fm_id, result in skill_results:
-                fm_name = GROUP_NAMES.get(fm_id, fm_id)
-                round_entry = {
-                    "round": round_i + 1,
-                    "fm_id": fm_id,
-                    "fm_name": fm_name,
-                    "success": result.success,
-                    "inner_iterations": result.inner_iterations,
-                    "outer_rounds": result.outer_rounds,
-                    "final_fm_rate": result.final_fm_rate,
-                    "final_pass_rate": result.final_pass_rate,
-                    "n_negatives": len(result.negatives),
-                }
-                results.append(round_entry)
-                self.tracker.log(round_entry, step=len(results) - 1)
-
-                if result.success:
-                    print(f"  Group-{fm_id} ({fm_name}): REPAIRED "
-                          f"(fm={result.final_fm_rate:.2f}, pass={result.final_pass_rate:.3f})")
-                    if best_result is None or result.final_pass_rate > best_result.final_pass_rate:
-                        best_result = result
-                else:
-                    print(f"  Group-{fm_id} ({fm_name}): FAILED after {result.outer_rounds} rounds")
-                    # Persist negatives for future runs
-                    self.negatives_store.extend(fm_id, result.negatives)
-                    self.evolver.record_failure(fm_id)
-
-                    # Meta-evolution check
-                    if self.evolver.should_evolve(fm_id):
-                        print(f"  Triggering meta-evolution for Skill-{fm_id}...")
-                        all_neg = self.negatives_store.load(fm_id)
-                        skill = get_skill(fm_id)
-                        evolved_path = self.evolver.evolve_skill(fm_id, skill, all_neg)
-                        if evolved_path:
-                            print(f"    Evolved skill saved: {evolved_path}")
-                            load_evolved_skill(fm_id, evolved_path)
-
-            # 6. Update DAG if any skill succeeded
-            if best_result and best_result.dag:
-                current_dag = best_result.dag
-                self.dag = current_dag
-                self.evolver.reset_failures(best_result.fm_id)
-                print(f"  Adopting DAG from Skill-{best_result.fm_id}.")
-            else:
-                print(f"  No successful repairs this round.")
-
-            print()
-
-        # Summary
-        summary = {
-            "total_rounds": len(set(r["round"] for r in results)),
-            "results": results,
-        }
-        self.tracker.save_local("skill_optimization.json")
-        return summary
-
-    def _run_skill(
-        self,
-        job: dict,
-        dag: MASDAG,
-        tasks: list[str],
-        traces: list,
-        profiles: list[FMProfile],
-        budget: SkillBudget | None,
-    ) -> tuple[str, SkillResult]:
-        """Run a single skill job."""
-        fm_id = job["fm_id"]
-        proposal_idx = job["proposal_idx"]
-        validation_idx = job["validation_idx"]
-        prior_negatives = job["prior_negatives"]
-
-        # Each skill gets its own DAG copy
-        skill_dag = copy.deepcopy(dag)
-
-        try:
-            skill = get_skill(fm_id)
-        except KeyError:
-            return fm_id, SkillResult(success=False, fm_id=fm_id)
-
-        # Inject prior negatives into the skill run
-        skill_budget = budget or SkillBudget()
-
-        result = skill.run(
-            original_dag=skill_dag,
-            proposal_traces=_take_by_index(traces, proposal_idx),
-            proposal_profiles=_take_by_index(profiles, proposal_idx),
-            proposal_tasks=_take_by_index(tasks, proposal_idx),
-            validation_tasks=_take_by_index(tasks, validation_idx),
-            runner=self.runner,
-            diagnoser=self.diagnoser,
-            budget=SkillBudget(
-                max_llm_calls=skill_budget.max_llm_calls,
-                max_batch_runs=skill_budget.max_batch_runs,
-                max_wall_time_s=skill_budget.max_wall_time_s,
-            ),
-            prior_negatives=prior_negatives,
-        )
-
-        return fm_id, result
-
-    async def aoptimize(
-        self,
-        tasks: list[str],
-        max_rounds: int = 1,
-        target_fm: str | None = None,
-        budget: SkillBudget | None = None,
-        concurrency: int = 256,
-        trace_output_base: str | Path | None = None,
-        dag_output_base: str | Path | None = None,
-    ) -> dict:
-        """Async optimization: diagnose → parallel skills → forge all successes.
-
-        Default max_rounds=1: each skill's inner loop handles convergence.
-        Outer rounds are available but rarely needed.
-        """
-        current_dag = self.dag
-
-        print(f"=== OptPilot Skill Workflow Optimization (async) ===")
-        print(f"Tasks: {len(tasks)}, Max rounds: {max_rounds}, Concurrency: {concurrency}")
-        print()
-
-        results: list[dict] = []
-        dag_versions: list[dict[str, str | int]] = []
-        if dag_output_base:
-            initial_path = _save_dag_if_possible(current_dag, Path(dag_output_base) / "initial.yaml")
-            if initial_path:
-                dag_versions.append({"stage": "initial", "path": initial_path})
-
-        for round_i in range(max_rounds):
-            print(f"=== Round {round_i + 1}/{max_rounds} ===")
-            round_trace_dir = (
-                Path(trace_output_base) / f"round_{round_i + 1}" / "train"
-                if trace_output_base else None
-            )
-            round_dag_dir = Path(dag_output_base) / f"round_{round_i + 1}" if dag_output_base else None
-            if round_dag_dir:
-                start_path = _save_dag_if_possible(current_dag, round_dag_dir / "start.yaml")
-                if start_path:
-                    dag_versions.append({"stage": "round_start", "round": round_i + 1, "path": start_path})
-
-            # 1. Run MAS + Diagnose
-            print(f"  [1/3] Running MAS on {len(tasks)} tasks + diagnosing...")
-            traces = await self.runner.arun_batch(
-                tasks,
-                dag=current_dag,
-                output_base=round_trace_dir,
-                max_concurrency=concurrency,
-            )
-            profiles = await self.diagnoser.adiagnose_batch(traces)
-
-            # 2. Rank FM groups
-            fm_ranking = rank_fm_groups(profiles, target_fm)
-            if not fm_ranking:
-                print(f"  No active FM groups with ≥2 traces. Done!")
-                break
-
-            print(f"  Active FM groups: {', '.join(f'{fid}({c})' for fid, c in fm_ranking)}")
-
-            # 3. Prepare and dispatch skills
-            skill_jobs: list[dict] = []
-            for fm_id, _fm_count in fm_ranking:
-                split = split_proposal_validation_indices(fm_id, profiles)
-                if split is None:
-                    print(f"  Skipping Group-{fm_id}: cannot split proposal/validation.")
-                    continue
-                proposal_idx, validation_idx = split
-                prior_negatives = self.negatives_store.load(fm_id)
-                skill_jobs.append({
-                    "fm_id": fm_id,
-                    "proposal_idx": proposal_idx,
-                    "validation_idx": validation_idx,
-                    "prior_negatives": prior_negatives,
-                })
-
-            if not skill_jobs:
-                print(f"  No dispatchable skills. Done!")
-                break
-
-            print(f"  [2/3] Dispatching {len(skill_jobs)} skills in parallel...")
-            skill_coros = [
-                self._arun_skill(job, current_dag, tasks, traces, profiles, budget, concurrency)
-                for job in skill_jobs
-            ]
-            skill_results_raw = await asyncio.gather(*skill_coros)
-
-            # 4. Collect results
-            successful_results: list[SkillResult] = []
-            for fm_id, result in skill_results_raw:
-                fm_name = GROUP_NAMES.get(fm_id, fm_id)
-                round_entry = {
-                    "round": round_i + 1,
-                    "fm_id": fm_id,
-                    "fm_name": fm_name,
-                    "success": result.success,
-                    "inner_iterations": result.inner_iterations,
-                    "outer_rounds": result.outer_rounds,
-                    "final_fm_rate": result.final_fm_rate,
-                    "final_pass_rate": result.final_pass_rate,
-                    "n_negatives": len(result.negatives),
-                }
-                results.append(round_entry)
-                self.tracker.log(round_entry, step=len(results) - 1)
-
-                if result.success:
-                    print(f"  Group-{fm_id} ({fm_name}): REPAIRED "
-                          f"(fm={result.final_fm_rate:.2f}, pass={result.final_pass_rate:.3f})")
-                    successful_results.append(result)
-                    if round_dag_dir and result.dag is not None:
-                        skill_path = _save_dag_if_possible(
-                            result.dag,
-                            round_dag_dir / f"skill_{fm_id}_success.yaml",
-                        )
-                        if skill_path:
-                            dag_versions.append({
-                                "stage": "skill_success",
-                                "round": round_i + 1,
-                                "fm_id": fm_id,
-                                "path": skill_path,
-                            })
-                else:
-                    print(f"  Group-{fm_id} ({fm_name}): FAILED after {result.outer_rounds} rounds")
-                    self.negatives_store.extend(fm_id, result.negatives)
-                    self.evolver.record_failure(fm_id)
-
-            # 5. Forge: merge ALL successful skill changes
-            if successful_results:
-                if len(successful_results) == 1:
-                    merged_dag = successful_results[0].dag
-                    print(f"  [3/3] Single success — adopting DAG from Skill-{successful_results[0].fm_id}.")
-                else:
-                    print(f"  [3/3] Forging {len(successful_results)} successful repairs...")
-                    merged_dag = await forge(current_dag, successful_results)
-                    print(f"  Forge complete — merged changes from: "
-                          f"{', '.join(r.fm_id for r in successful_results)}")
-
-                current_dag = merged_dag
-                self.dag = current_dag
-                for r in successful_results:
-                    self.evolver.reset_failures(r.fm_id)
-            else:
-                print(f"  No successful repairs this round.")
-
-            if round_dag_dir:
-                final_path = _save_dag_if_possible(current_dag, round_dag_dir / "final.yaml")
-                if final_path:
-                    dag_versions.append({"stage": "round_final", "round": round_i + 1, "path": final_path})
-
-            print()
-
-        if dag_output_base:
-            final_path = _save_dag_if_possible(current_dag, Path(dag_output_base) / "final.yaml")
-            if final_path:
-                dag_versions.append({"stage": "final", "path": final_path})
-
-        summary = {
-            "total_rounds": len(set(r["round"] for r in results)),
-            "results": results,
-            "dag_versions": dag_versions,
-        }
-        self.tracker.save_local("skill_optimization.json")
-        return summary
-
-    async def aoptimize_from_traces(
-        self,
-        tasks: list[str],
-        trace_base: str | Path,
-        target_fm: str | None = None,
-        budget: SkillBudget | None = None,
-        concurrency: int = 256,
-        trace_output_base: str | Path | None = None,
-        dag_output_base: str | Path | None = None,
-    ) -> dict:
-        """Warm-start optimization from persisted train traces.
-
-        This re-runs diagnosis on existing traces and dispatches skills without
-        re-executing the train set.
-        """
-        current_dag = self.dag
-        results: list[dict] = []
-        dag_versions: list[dict[str, str | int]] = []
-        if dag_output_base:
-            initial_path = _save_dag_if_possible(current_dag, Path(dag_output_base) / "initial.yaml")
-            if initial_path:
-                dag_versions.append({"stage": "initial", "path": initial_path})
-
-        round_root = Path(trace_output_base) / "round_1" if trace_output_base else None
-        round_dag_dir = Path(dag_output_base) / "round_1" if dag_output_base else None
-        if round_dag_dir:
-            start_path = _save_dag_if_possible(current_dag, round_dag_dir / "start.yaml")
-            if start_path:
-                dag_versions.append({"stage": "round_start", "round": 1, "path": start_path})
-
-        print("=== OptPilot Skill Workflow Warm Start (async) ===")
-        print(f"Tasks: {len(tasks)}, Trace source: {trace_base}, Concurrency: {concurrency}")
-        print()
-        print("  [1/3] Loading persisted train traces + re-diagnosing...")
-        traces = self._load_persisted_traces(trace_base, tasks)
-        if round_root:
-            _write_json(
-                round_root / "reused_train_manifest.json",
-                {
-                    "source_trace_base": str(trace_base),
-                    "n_traces": len(traces),
-                    "traces": [
-                        {
-                            "task_index": idx,
-                            "trace_path": trace.trace_path,
-                            "task_key": trace.task_key,
-                            "benchmark_name": trace.benchmark_name,
-                        }
-                        for idx, trace in enumerate(traces)
-                    ],
-                },
-            )
-        profiles = await self.diagnoser.adiagnose_batch(traces)
-
-        fm_ranking = rank_fm_groups(profiles, target_fm)
-        if not fm_ranking:
-            print("  No active FM groups with ≥2 traces. Done!")
-            return {"total_rounds": 0, "results": [], "dag_versions": dag_versions}
-
-        print(f"  Active FM groups: {', '.join(f'{fid}({c})' for fid, c in fm_ranking)}")
-
-        skill_jobs: list[dict] = []
-        for fm_id, _fm_count in fm_ranking:
-            split = split_proposal_validation_indices(fm_id, profiles)
-            if split is None:
-                print(f"  Skipping Group-{fm_id}: cannot split proposal/validation.")
-                continue
-            proposal_idx, validation_idx = split
-            skill_jobs.append({
-                "fm_id": fm_id,
-                "proposal_idx": proposal_idx,
-                "validation_idx": validation_idx,
-                "prior_negatives": self.negatives_store.load(fm_id),
-            })
-
-        diagnosis_dir = round_root / "diagnose" if round_root else None
-        if diagnosis_dir:
-            self._persist_diagnosis_artifacts(
-                output_dir=diagnosis_dir,
-                traces=traces,
-                profiles=profiles,
-                fm_ranking=fm_ranking,
-                skill_jobs=skill_jobs,
-                source_trace_base=trace_base,
-            )
-
-        if not skill_jobs:
-            print("  No dispatchable skills. Done!")
-            return {"total_rounds": 1, "results": [], "dag_versions": dag_versions}
-
-        print(f"  [2/3] Dispatching {len(skill_jobs)} skills in parallel...")
-        skill_coros = [
-            self._arun_skill(job, current_dag, tasks, traces, profiles, budget, concurrency)
-            for job in skill_jobs
-        ]
-        skill_results_raw = await asyncio.gather(*skill_coros)
-
-        successful_results: list[SkillResult] = []
-        for fm_id, result in skill_results_raw:
-            fm_name = GROUP_NAMES.get(fm_id, fm_id)
-            round_entry = {
-                "round": 1,
-                "fm_id": fm_id,
-                "fm_name": fm_name,
-                "success": result.success,
-                "inner_iterations": result.inner_iterations,
-                "outer_rounds": result.outer_rounds,
-                "final_fm_rate": result.final_fm_rate,
-                "final_pass_rate": result.final_pass_rate,
-                "n_negatives": len(result.negatives),
-            }
-            results.append(round_entry)
-            self.tracker.log(round_entry, step=len(results) - 1)
-
-            if result.success:
-                print(
-                    f"  Group-{fm_id} ({fm_name}): REPAIRED "
-                    f"(fm={result.final_fm_rate:.2f}, pass={result.final_pass_rate:.3f})"
-                )
-                successful_results.append(result)
-                if round_dag_dir and result.dag is not None:
-                    skill_path = _save_dag_if_possible(
-                        result.dag,
-                        round_dag_dir / f"skill_{fm_id}_success.yaml",
-                    )
-                    if skill_path:
-                        dag_versions.append({
-                            "stage": "skill_success",
-                            "round": 1,
-                            "fm_id": fm_id,
-                            "path": skill_path,
-                        })
-            else:
-                print(f"  Group-{fm_id} ({fm_name}): FAILED after {result.outer_rounds} rounds")
-                self.negatives_store.extend(fm_id, result.negatives)
-                self.evolver.record_failure(fm_id)
-
-        if successful_results:
-            if len(successful_results) == 1:
-                merged_dag = successful_results[0].dag
-                print(f"  [3/3] Single success — adopting DAG from Skill-{successful_results[0].fm_id}.")
-            else:
-                print(f"  [3/3] Forging {len(successful_results)} successful repairs...")
-                merged_dag = await forge(current_dag, successful_results)
-                print(
-                    "  Forge complete — merged changes from: "
-                    f"{', '.join(r.fm_id for r in successful_results)}"
-                )
-
-            current_dag = merged_dag
-            self.dag = current_dag
-            for r in successful_results:
-                self.evolver.reset_failures(r.fm_id)
-        else:
-            print("  No successful repairs this round.")
-
-        if round_dag_dir:
-            final_round_path = _save_dag_if_possible(current_dag, round_dag_dir / "final.yaml")
-            if final_round_path:
-                dag_versions.append({"stage": "round_final", "round": 1, "path": final_round_path})
-        if dag_output_base:
-            final_path = _save_dag_if_possible(current_dag, Path(dag_output_base) / "final.yaml")
-            if final_path:
-                dag_versions.append({"stage": "final", "path": final_path})
-
-        summary = {
-            "total_rounds": 1,
-            "results": results,
-            "dag_versions": dag_versions,
-            "trace_source": str(trace_base),
-            "diagnose_dir": str(diagnosis_dir) if diagnosis_dir else "",
-        }
-        self.tracker.save_local("skill_optimization.json")
-        return summary
-
-    async def aoptimize_from_diagnose(
-        self,
-        tasks: list[str],
-        diagnose_dir: str | Path,
-        target_fm: str | None = None,
-        budget: SkillBudget | None = None,
-        concurrency: int = 256,
-        dag_output_base: str | Path | None = None,
-    ) -> dict:
-        """Warm-start optimization directly from persisted diagnose artifacts."""
-        current_dag = self.dag
-        results: list[dict] = []
-        dag_versions: list[dict[str, str | int]] = []
-        if dag_output_base:
-            initial_path = _save_dag_if_possible(current_dag, Path(dag_output_base) / "initial.yaml")
-            if initial_path:
-                dag_versions.append({"stage": "initial", "path": initial_path})
-
-        round_dag_dir = Path(dag_output_base) / "round_1" if dag_output_base else None
-        if round_dag_dir:
-            start_path = _save_dag_if_possible(current_dag, round_dag_dir / "start.yaml")
-            if start_path:
-                dag_versions.append({"stage": "round_start", "round": 1, "path": start_path})
-
-        print("=== OptPilot Skill Workflow Diagnose Reuse (async) ===")
-        print(f"Tasks: {len(tasks)}, Diagnose source: {diagnose_dir}, Concurrency: {concurrency}")
-        print()
-        print("  [1/3] Loading persisted diagnose artifacts...")
-        traces, profiles, skill_jobs, fm_ranking = self._load_persisted_diagnosis(
-            diagnose_dir=diagnose_dir,
-            tasks=tasks,
-            target_fm=target_fm,
-        )
-
-        if not fm_ranking:
-            print("  No active FM groups with ≥2 traces. Done!")
-            return {
-                "total_rounds": 0,
-                "results": [],
-                "dag_versions": dag_versions,
-                "diagnose_source": str(diagnose_dir),
-            }
-
-        print(f"  Active FM groups: {', '.join(f'{fid}({c})' for fid, c in fm_ranking)}")
-
-        if not skill_jobs:
-            print("  No dispatchable skills. Done!")
-            return {
-                "total_rounds": 1,
-                "results": [],
-                "dag_versions": dag_versions,
-                "diagnose_source": str(diagnose_dir),
-            }
-
-        print(f"  [2/3] Dispatching {len(skill_jobs)} skills in parallel...")
-        skill_coros = [
-            self._arun_skill(job, current_dag, tasks, traces, profiles, budget, concurrency)
-            for job in skill_jobs
-        ]
-        skill_results_raw = await asyncio.gather(*skill_coros)
-
-        successful_results: list[SkillResult] = []
-        for fm_id, result in skill_results_raw:
-            fm_name = GROUP_NAMES.get(fm_id, fm_id)
-            round_entry = {
-                "round": 1,
-                "fm_id": fm_id,
-                "fm_name": fm_name,
-                "success": result.success,
-                "inner_iterations": result.inner_iterations,
-                "outer_rounds": result.outer_rounds,
-                "final_fm_rate": result.final_fm_rate,
-                "final_pass_rate": result.final_pass_rate,
-                "n_negatives": len(result.negatives),
-            }
-            results.append(round_entry)
-            self.tracker.log(round_entry, step=len(results) - 1)
-
-            if result.success:
-                print(
-                    f"  Group-{fm_id} ({fm_name}): REPAIRED "
-                    f"(fm={result.final_fm_rate:.2f}, pass={result.final_pass_rate:.3f})"
-                )
-                successful_results.append(result)
-                if round_dag_dir and result.dag is not None:
-                    skill_path = _save_dag_if_possible(
-                        result.dag,
-                        round_dag_dir / f"skill_{fm_id}_success.yaml",
-                    )
-                    if skill_path:
-                        dag_versions.append({
-                            "stage": "skill_success",
-                            "round": 1,
-                            "fm_id": fm_id,
-                            "path": skill_path,
-                        })
-            else:
-                print(f"  Group-{fm_id} ({fm_name}): FAILED after {result.outer_rounds} rounds")
-                self.negatives_store.extend(fm_id, result.negatives)
-                self.evolver.record_failure(fm_id)
-
-        if successful_results:
-            if len(successful_results) == 1:
-                merged_dag = successful_results[0].dag
-                print(f"  [3/3] Single success — adopting DAG from Skill-{successful_results[0].fm_id}.")
-            else:
-                print(f"  [3/3] Forging {len(successful_results)} successful repairs...")
-                merged_dag = await forge(current_dag, successful_results)
-                print(
-                    "  Forge complete — merged changes from: "
-                    f"{', '.join(r.fm_id for r in successful_results)}"
-                )
-
-            current_dag = merged_dag
-            self.dag = current_dag
-            for r in successful_results:
-                self.evolver.reset_failures(r.fm_id)
-        else:
-            print("  No successful repairs this round.")
-
-        if round_dag_dir:
-            final_round_path = _save_dag_if_possible(current_dag, round_dag_dir / "final.yaml")
-            if final_round_path:
-                dag_versions.append({"stage": "round_final", "round": 1, "path": final_round_path})
-        if dag_output_base:
-            final_path = _save_dag_if_possible(current_dag, Path(dag_output_base) / "final.yaml")
-            if final_path:
-                dag_versions.append({"stage": "final", "path": final_path})
-
-        summary = {
-            "total_rounds": 1,
-            "results": results,
-            "dag_versions": dag_versions,
-            "diagnose_source": str(diagnose_dir),
-        }
-        self.tracker.save_local("skill_optimization.json")
-        return summary
-
-    async def _arun_skill(
-        self,
-        job: dict,
-        dag: MASDAG,
-        tasks: list[str],
-        traces: list,
-        profiles: list[FMProfile],
-        budget: SkillBudget | None,
-        concurrency: int = 256,
-    ) -> tuple[str, SkillResult]:
-        """Async version of _run_skill."""
-        fm_id = job["fm_id"]
-        proposal_idx = job["proposal_idx"]
-        validation_idx = job["validation_idx"]
-        prior_negatives = job["prior_negatives"]
-
-        skill_dag = copy.deepcopy(dag)
-
-        try:
-            skill = get_skill(fm_id)
-        except KeyError:
-            return fm_id, SkillResult(success=False, fm_id=fm_id)
-
-        skill_budget = budget or SkillBudget()
-
-        result = await skill.arun(
-            original_dag=skill_dag,
-            proposal_traces=_take_by_index(traces, proposal_idx),
-            proposal_profiles=_take_by_index(profiles, proposal_idx),
-            proposal_tasks=_take_by_index(tasks, proposal_idx),
-            validation_tasks=_take_by_index(tasks, validation_idx),
-            runner=self.runner,
-            diagnoser=self.diagnoser,
-            budget=SkillBudget(
-                max_llm_calls=skill_budget.max_llm_calls,
-                max_batch_runs=skill_budget.max_batch_runs,
-                max_wall_time_s=skill_budget.max_wall_time_s,
-            ),
-            prior_negatives=prior_negatives,
-            concurrency=concurrency,
-        )
-
-        return fm_id, result
-
-    def _run_parallel(
-        self, jobs, dag, tasks, traces, profiles, budget,
-    ) -> list[tuple[str, SkillResult]]:
-        """Run multiple skills in parallel using threads."""
-        results: list[tuple[str, SkillResult]] = []
-
-        with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
-            futures = {
-                executor.submit(self._run_skill, job, dag, tasks, traces, profiles, budget): job
-                for job in jobs
-            }
-            for future in as_completed(futures):
-                job = futures[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                except Exception as e:
-                    fm_id = job["fm_id"]
-                    print(f"  Skill-{fm_id} failed with error: {e}")
-                    results.append((fm_id, SkillResult(success=False, fm_id=fm_id)))
-
-        return results
-
-    def _run_sequential(
-        self, jobs, dag, tasks, traces, profiles, budget,
-    ) -> list[tuple[str, SkillResult]]:
-        """Run skills sequentially."""
-        results: list[tuple[str, SkillResult]] = []
-        for job in jobs:
-            result = self._run_skill(job, dag, tasks, traces, profiles, budget)
-            results.append(result)
-        return results
+            fm_ranking_list = [item for item in fm_ranking_list if item[0] == target_fm]
+        if not fm_ranking_list:
+            fm_ranking_list = rank_fm_groups(profiles, target_fm)
+
+        return traces, profiles, [], fm_ranking_list  # type: ignore[return-value]

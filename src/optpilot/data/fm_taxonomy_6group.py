@@ -21,6 +21,11 @@ GROUP_DEFINITIONS: dict[str, dict] = {
             "Includes disobeying task requirements and acting outside assigned role scope."
         ),
         "repair_strategy": "Optimize prompt design, clarify role definitions and constraints.",
+        "analyze_hint": (
+            "Focus on how agents fail to follow task constraints or overstep their "
+            "assigned roles. Look for agents that disobey task requirements, produce "
+            "outputs outside their role scope, or ignore explicit instructions."
+        ),
         "failure_examples": (
             "Example 1: The task asks 'find all integers n satisfying ...', but "
             "Agent_Problem_Solver assumes n must be positive without justification, "
@@ -40,6 +45,11 @@ GROUP_DEFINITIONS: dict[str, dict] = {
             "Includes unnecessary step repetition and inability to recognize stopping criteria."
         ),
         "repair_strategy": "Add loop detection, max iteration limits, explicit termination conditions.",
+        "analyze_hint": (
+            "Focus on where the system enters repetitive loops or fails to terminate. "
+            "Look for agents that repeat the same steps unnecessarily, fail to recognize "
+            "stopping criteria, or get stuck in circular conversation patterns."
+        ),
         "failure_examples": (
             "Example 1: Agent_Verifier keeps saying 'SUGGESTED NEXT SPEAKER: "
             "Agent_Code_Executor' indefinitely, never outputting SOLUTION_FOUND, "
@@ -59,6 +69,11 @@ GROUP_DEFINITIONS: dict[str, dict] = {
             "Includes passive context truncation and active conversation reinitialization."
         ),
         "repair_strategy": "Improve state management, context window management, checkpoint mechanisms.",
+        "analyze_hint": (
+            "Focus on how context is lost between agents or across conversation turns. "
+            "Look for truncated information, missing carry_data edges, and state that "
+            "fails to propagate through the workflow."
+        ),
         "failure_examples": (
             "Example 1: Agent_Verifier receives output from Agent_Code_Executor but "
             "has lost the original problem statement, so it verifies against a wrong "
@@ -79,6 +94,11 @@ GROUP_DEFINITIONS: dict[str, dict] = {
             "and ignoring other agents' input."
         ),
         "repair_strategy": "Improve communication protocols, enforce information sharing mechanisms.",
+        "analyze_hint": (
+            "Focus on breakdowns in information flow between agents. Look for agents "
+            "that fail to ask for clarification, withhold critical information, or "
+            "ignore input from other agents in the group chat."
+        ),
         "failure_examples": (
             "Example 1: Agent_Problem_Solver finds the answer is 42 but buries it in "
             "a long explanation. Agent_Verifier cannot locate the answer and asks "
@@ -99,6 +119,11 @@ GROUP_DEFINITIONS: dict[str, dict] = {
             "Includes task derailment from objectives and mismatch between reasoning and actions."
         ),
         "repair_strategy": "Add goal tracking, CoT verification, action-reasoning consistency checks.",
+        "analyze_hint": (
+            "Focus on where agents deviate from the correct execution trajectory. "
+            "Look for reasoning chains that diverge from the task objective, "
+            "and mismatches between an agent's stated reasoning and its actual actions."
+        ),
         "failure_examples": (
             "Example 1: The problem asks for 'the number of solutions', but "
             "Agent_Problem_Solver solves for 'the value of x' and outputs a single "
@@ -121,6 +146,11 @@ GROUP_DEFINITIONS: dict[str, dict] = {
             "and verification that reaches wrong conclusions."
         ),
         "repair_strategy": "Multi-level verification: low-level code compilation + high-level goal checking.",
+        "analyze_hint": (
+            "Focus on where output verification is absent, premature, or incorrect. "
+            "Look for agents that terminate without checking results, skip verification "
+            "steps, or verify solutions but reach wrong conclusions."
+        ),
         "failure_examples": (
             "Example 1: Agent_Verifier immediately accepts Agent_Problem_Solver's "
             "answer without checking Agent_Code_Executor's result, even though the "

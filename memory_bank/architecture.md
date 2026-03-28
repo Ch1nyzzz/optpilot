@@ -10,19 +10,18 @@ optpilot/
 │   │                          #   EvolveResult, ReflectInsight, SkillBudget,
 │   │                          #   AnalysisResult, SkillResult)
 │   ├── llm.py                 # LLM interface (Together AI, sync + async, rate limiting)
-│   ├── orchestrator.py        # Skill dispatch loop (diagnose → parallel skills → adopt DAG)
+│   ├── orchestrator.py        # Jacobian-driven single repair loop
 │   ├── registry.py            # Runner factory
 │   ├── tracking.py            # Experiment tracking (W&B integration)
-│   ├── skills/                # Skill Workflows (one per FM group)
-│   │   ├── base.py            # BaseSkill ABC + GenericSkill + run() template
+│   ├── skills/                # Repair loop and pattern catalog
+│   │   ├── repair_loop.py     # Stateless functions: analyze(), aevolve(), reflect()
 │   │   ├── tools.py           # ToolContext, search_and_replace/bash tools,
 │   │   │                      #   dag_to_python(), python_source_to_dag()
-│   │   ├── forger.py          # Merge changes from multiple Skills (Python source replay)
-│   │   ├── subskills.py       # SubSkill persistence (successful repair patterns)
-│   │   ├── registry.py        # FM group → Skill class mapping + dynamic loading
+│   │   ├── repair_patterns.py # FailureSignature, RepairPattern, PatternCatalog (JSON-persisted)
+│   │   ├── jacobian.py        # RepairJacobian matrix (failure×pattern → success rate)
 │   │   ├── negatives.py       # ReflectInsight persistence (JSON per FM group)
-│   │   ├── evolution.py       # Skill meta-evolution (LLM modifies Skill code)
-│   │   └── skill_{a-f}.py     # 6 concrete skills (A-F)
+│   │   ├── evolution.py       # CatalogEvolver (LLM modifies pattern catalog)
+│   │   └── base.py            # [DEPRECATED] Old BaseSkill/GenericSkill classes
 │   ├── dag/                   # DAG abstraction and execution
 │   │   ├── core.py            # MASDAG, DAGNode, DAGEdge + YAML/Python serialization
 │   │   └── executor.py        # DAGExecutor: lightweight BFS workflow engine
@@ -36,7 +35,7 @@ optpilot/
 │   ├── library/
 │   │   └── repair_library.py  # Persistent repair library (JSON, buffered flush)
 │   └── data/
-│       ├── fm_taxonomy_6group.py # Canonical A-F failure-group taxonomy
+│       ├── fm_taxonomy_6group.py # Canonical A-F failure-group taxonomy (+ analyze_hint)
 │       ├── loader.py          # Load MAST-Data traces (normalizes to A-F)
 │       └── benchmarks.py      # Official benchmark loaders + ground-truth scorers
 │                              # (MMLU, AIME 2025, OlympiadBench)
@@ -44,13 +43,16 @@ optpilot/
 │   ├── ag2_mathchat.yaml      # AG2 MathChat 3-agent GroupChat (primary)
 │   └── chatdev.yaml           # ChatDev v1 workflow (reference)
 ├── experiments/               # Experiment pipelines
-│   ├── run_ag2_mathchat_skill.py  # Primary entry: AG2 × benchmarks × Skill Workflows
+│   ├── run_ag2_mathchat_skill.py  # Primary entry: AG2 × benchmarks × Jacobian loop
 │   └── ...                    # offline/online pipelines, ablations
 ├── data/annotations/          # Blind/manual labeling packs for 6-group evaluation
 ├── tests/                     # Regression tests
-├── library_store/             # Repair library + negatives + evolved skills
+├── library_store/             # Persistent experience
 │   ├── negatives/             # Per-FM-group ReflectInsight history (JSON)
-│   ├── evolved_skills/        # Meta-evolved Skill source files
+│   ├── jacobian/              # Jacobian matrix + outcomes (JSON/JSONL)
+│   ├── pattern_catalog.json   # Evolved pattern catalog (JSON, runtime-modified)
+│   ├── skill_agent_traces/    # Per-FM-group tool-calling transcripts
+│   ├── meta_evolve_traces/    # Catalog evolution transcripts
 │   ├── offline_hints/         # Offline repair hints
 │   ├── offline_skills/        # Offline wrapped skills
 │   ├── online_hints/          # Online repair hints
@@ -86,106 +88,78 @@ Loop counter 约定：
 - 当 continue_edges 和 exit_edges 都为空时（无法识别循环结构），才 fallback 到所有 trigger edge
 - 仅有 exit_edges 而无 continue_edges 时（被动计数器），count < max_iter 时不触发任何下游
 
-## Skill Workflow Architecture (2026-03-26)
+## Jacobian-Driven Single Repair Loop (2026-03-28)
 
-取代了原来的 Optimizer+Distiller+WrapUp：
-
-| 模块 | 职责 |
-|------|------|
-| **Orchestrator** | 诊断 → 按 FM 频率分发给 Skill Workflows（支持并行） |
-| **Runner** | 用 DAGExecutor 执行 MASDAG，收集 trace + benchmark scoring |
-| **Diagnoser** | 6-group FM 分类 (MiniMax M2.5) + agent/step 定位 |
-| **Skill Workflows (A-F)** | 6 个 Python 类，每个 FM group 一个完整的修复 agent |
-| **SkillEvolver** | Skill 连续失败达到阈值（默认 3，可配置） → LLM 修改 Skill 源码 → 动态加载 |
-
-### Skill 内部闭环
+取代了原来的 Skill 分层架构（6 个 Skill 类 + parallel dispatch + forger merge）。
+现在是 OpenEvolve 风格的单循环，加上 Jacobian 经验累积：
 
 ```
-for outer_round in range(MAX_OUTER_ROUNDS=3):
-    analyze(dag, traces, profiles, negatives) → AnalysisResult
-    for inner_iter in range(MAX_INNER_ITERS=5):
-        evolve(dag, analysis, negatives, history) → EvolveResult (Python code-level)
-        run_batch(proposal_tasks) → new_traces
-        diagnose → fm_rate
-        if fm_rate < 0.2 or no_improvement: break
-    run_batch(validation_tasks, original_dag) → before_val  # cached at start
-    run_batch(validation_tasks, repaired_dag) → after_val
-    if judge(before_val, after_val): return success
-    reflect(...) → ReflectInsight → negatives.append(insight)
+Orchestrator.aoptimize():
+  incumbent_traces = run(initial_dag, fixed_eval_tasks)     # 只初始化一次
+  incumbent_profiles = classify(incumbent_traces)
+  incumbent_score = fitness(incumbent_traces, incumbent_profiles)
+
+  for round in max_rounds:
+      signature = extract_dominant_failure(incumbent_profiles)  # 提取最严重的 FM group
+
+      pattern = jacobian.recommend(signature)                   # 经验驱动选修复方向
+      analysis = analyze(dag, incumbent_traces, incumbent_profiles)
+      result = aevolve(dag, analysis, pattern)                 # LLM 修 DAG
+
+      candidate_traces = run(result.dag, fixed_eval_tasks)     # 每轮只评估新候选一次
+      candidate_profiles = classify(candidate_traces)
+      candidate_score = fitness(candidate_traces, candidate_profiles)
+
+      jacobian.update(outcome)                                 # 累积经验
+
+      if candidate_score > incumbent_score:
+          dag = result.dag
+          incumbent_traces = candidate_traces
+          incumbent_profiles = candidate_profiles
+          incumbent_score = candidate_score
+      else:
+          insight = reflect(...)                               # 反思教训
+          negatives.append(insight)
+          if should_evolve(): catalog_evolve()
 ```
 
-关键设计：
-- **Validation 基线缓存**：before_val_traces 在整个 run() 生命周期只算一次
-- **pass_rate 使用 task_score**：优先使用 ground-truth benchmark 评分（而非 task_success 完成率）
-- **Judge 条件**：FM rate 必须严格下降；同时没有真实 DAG diff 的 repair 不允许判 success
-- **SkillBudget**：max_llm_calls=30 / max_batch_runs=10 / max_wall_time_s=600
-- **失败快照**：若 outer round 因 no-op repair 或 budget exhaustion 未进入正常 reflect，也会生成合成 ReflectInsight，避免 `outer_rounds=0, n_negatives=0` 的黑箱失败
+### 关键组件
 
-### 并行 Skill 执行
+| 模块 | 文件 | 职责 |
+|------|------|------|
+| **Orchestrator** | `orchestrator.py` | 单循环控制器：诊断 → 推荐 → 修复 → 评估 |
+| **repair_loop** | `skills/repair_loop.py` | 无状态函数：`analyze()`, `aevolve()`, `reflect()` |
+| **PatternCatalog** | `skills/repair_patterns.py` | 动态修复模式目录，JSON 持久化，支持运行时增删改 |
+| **RepairJacobian** | `skills/jacobian.py` | (FM group × 修复模式) → 成功率矩阵 |
+| **CatalogEvolver** | `skills/evolution.py` | 当 pattern 反复失败 → LLM 改进 catalog |
+| **NegativesStore** | `skills/negatives.py` | 按 FM group 持久化失败教训 |
 
-不同 FM group 的 Skill 可以并行优化（ThreadPoolExecutor），各自工作在 DAG 的独立 deepcopy 上。
-Orchestrator 收集所有结果，选最佳成功结果采纳到主 DAG。
+### Online Eval Protocol
 
-### Meta-Evolution
+- **固定 eval 子集**: 若设置 `eval_tasks_per_round`，取 train task 的固定前缀子集，所有 round 复用同一批 online eval task
+- **单次候选评估**: 每轮只运行一次 candidate DAG；当前 incumbent 的 traces / profiles / score 在 round 之间缓存
+- **Adopt 准则**: 仅当 candidate fitness 严格高于 incumbent fitness 时才采纳
+- **与 OpenEvolve 对齐**: online 阶段不做 “同轮 before/after 双跑”，而是 baseline 初始化一次 + 后续每轮只评估新候选
 
-当 Skill 连续失败达到阈值（默认 `OPTPILOT_META_EVOLVE_FAILURE_THRESHOLD=3`）：
-1. SkillEvolver 为 meta-agent 准备临时工作区：`$SKILL_FILE`、`meta_context.md`、`failure_summary.md`、`failures.json`
-2. `meta_context.md` 提供 repo 绝对路径和一句话摘要，指向 `skills/base.py`、`skills/tools.py`、`skills/registry.py`、`dag/executor.py`、`models.py`、`memory_bank/*`、negatives/subskills/evolved_skills 等持久信息地址
-3. meta-agent 用 `bash` 自己查看这些文件，只依赖摘要做索引而不是把全部内容塞进 prompt
-4. LLM 在更宽松预算下执行 tool-calling（默认 `OPTPILOT_META_EVOLVE_MAX_TURNS=30`，`OPTPILOT_META_EVOLVE_MAX_TOKENS=32768`）
-5. compile() 语法检查 → 保存到 `library_store/evolved_skills/`
-6. importlib 动态加载替换注册表中的旧版本
+### Repair Jacobian 系统
 
-### Agent Context Indexing
+用结构化的 (FM group × RepairPattern) → 成功率矩阵：
 
-普通 Skill evolve agent 也会在临时工作区收到 `agent_context.md`：
-- 提供 diagnosis 摘要
-- 列出 trace 文件位置
-- 提供 executor/core/models/memory_bank/negatives/subskills/skill_agent_traces 的绝对路径
-- 要求 agent 使用 `bash` (`cat` / `sed -n` / `rg`) 自己检查需要的文件
+- **FailureSignature**: online key 只用 `fm_group`；`dag_component` / `agent` 仅保留作离线元数据
+- **RepairPattern**: 可枚举的修复策略（13 个默认 pattern + 运行时可增加）
+- **PatternCatalog**: 动态 pattern 目录，加载/保存 JSON，支持 `add_pattern()` / `update_pattern()` / `effective` 标记
+- **RepairJacobian**: 矩阵存储 + 推荐 + 更新，持久化到 `library_store/jacobian/`
+- **冷启动**: 按 FM group 使用启发式 prior 打分（例如 B 偏 loop，C/D 偏 context/edge，F 偏 verification）
+- **Observed attribution**: online 不依赖 LLM 解释编辑；而是对 `old_dag -> new_dag` 做确定性结构差分，再映射成有限 pattern family
+- **数据驱动**: 随经验积累，贝叶斯混合逐渐从 prior 过渡到经验 success_rate
 
-### Persistent Trace Artifacts
+### Catalog Meta-Evolution
 
-在线实验入口会把完整 trace 持久化到 `results/*_artifacts/`：
-- Skill workflow: `optimization/round_k/train/task_i/trace.txt`，以及 `test_final/`、`test_baseline/`
-- Baseline workflow: `train/task_i/trace.txt` 和 `test/task_i/trace.txt`
-- 每个 `task_i/` 还会写 `trace.json`，保存 `benchmark_name`、`task_prompt`、`task_score`、`task_success`、`latency_s` 等 sidecar metadata
-- `MASTrace.trace_path` 会携带真实持久化路径，skill agent 优先读取这个路径；只有缺失时才回退到临时副本
-
-### Persistent Diagnose Artifacts
-
-warm-start 和常规优化都应把 diagnose 结果持久化，方便后续直接复用：
-- `optimization/round_k/diagnose/profiles.json`: 每条 trace 的 labels/localization + trace metadata
-- `optimization/round_k/diagnose/fm_groups/<FM>.json`: 按 FM 分组后的 trace 清单
-- `optimization/round_k/diagnose/skill_jobs/<FM>.json`: proposal/validation split 结果，供 skill repair 直接消费
-- 若是从旧 train traces warm-start，还会写 `optimization/round_k/reused_train_manifest.json` 指向原始 trace 路径
-- 在线实验入口支持两种复用方式：
-  - `--reuse-traces-dir`: 复用 train traces，但重新执行 diagnose
-  - `--reuse-diagnose-dir`: 直接复用 `diagnose/` 目录中的 `profiles.json` + `skill_jobs/*.json`，跳过 re-diagnose，直接 dispatch skills
-
-### Persistent Tool Traces
-
-Skill / meta-evolve agent 的 tool-calling transcript 也会持久化到 `library_store/`：
-- Skill evolve agent: `library_store/skill_agent_traces/<FM>/tool_trace_<timestamp>.json`
-- Meta-evolve agent: `library_store/meta_evolve_traces/<FM>/tool_trace_<timestamp>.json`
-- meta-evolve 的 `meta_context.md` 会显式给出这些目录和最近几条 transcript 的绝对路径，供 agent 自己用 `bash` 检查
-
-### DAG Version Artifacts
-
-在线实验入口也会把 DAG 版本持久化到 `results/*_artifacts/dag_versions/`：
-- Skill workflow: `input.yaml`、`optimization/initial.yaml`、`optimization/round_k/start.yaml`、成功 skill 的 `skill_<FM>_success.yaml`、`optimization/round_k/final.yaml`、`final.yaml`、`optimized_final.yaml`、`baseline_reference.yaml`
-- Baseline workflow: `baseline_input.yaml`、`baseline_final.yaml`
-- 目的是保证每次优化和 baseline 对比时，都能直接复用同一批 DAG 工件
-
-## Online Validation Protocol
-
-proposal / validation 分离：
-- proposal 子集：命中目标 FM 的 trace 的前半部分，用于聚合证据并生成 repair
-- validation 子集：所有剩余 trace（不与 proposal 重叠），至少保留一个命中该 FM 的 holdout
-
-验证标准：
-- 目标 FM 在 validation 上下降
-- repair 后的 DAG 必须与原 DAG 有真实差异
+当 pattern 连续失败达到阈值（默认 `META_EVOLVE_FAILURE_THRESHOLD=3`）：
+1. CatalogEvolver 为 LLM 准备 catalog.json + failure_summary.md + meta_context.md
+2. LLM 通过 `add_pattern` / `update_pattern` / `bash` 工具修改目录
+3. 可添加新 pattern、修改 description、标记无效 pattern
+4. 保存更新后的 catalog 到 `library_store/pattern_catalog.json`
 
 ## LLM Concurrency Control
 
@@ -204,7 +178,7 @@ proposal / validation 分离：
 - **E**: Task Drift / Reasoning Error
 - **F**: Verification Failure
 
-定义: `src/optpilot/data/fm_taxonomy_6group.py`
+定义: `src/optpilot/data/fm_taxonomy_6group.py`（含 `analyze_hint` 字段）
 FM Classifier: MiniMax M2.5（100 条 blind trace 校准，与人类专家容忍率 89.9%–98.0%）
 
 ## AG2 MathChat DAG

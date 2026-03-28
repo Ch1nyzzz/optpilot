@@ -11,7 +11,6 @@ from optpilot.models import (
 from optpilot.modules._legacy.distiller import Distiller
 from optpilot.modules.runner import OptPilotRunner
 from optpilot.modules._legacy.wrap_up import WrapUp
-from optpilot.orchestrator import split_proposal_validation_indices
 
 
 def _profile(trace_id: int, fm_id: str | None, cause: str = "loop repeats") -> FMProfile:
@@ -85,21 +84,6 @@ def test_distill_online_requires_pass_improvement(monkeypatch, tmp_path) -> None
     assert entry.validation_metrics["before_pass_rate"] == 1.0
     assert entry.validation_metrics["after_pass_rate"] == 1.0
 
-
-def test_split_proposal_validation_indices_keeps_holdout_positive() -> None:
-    profiles = [
-        _profile(0, "B"),
-        _profile(1, "B"),
-        _profile(2, None),
-        _profile(3, "B"),
-    ]
-
-    proposal_indices, validation_indices = split_proposal_validation_indices("B", profiles) or ([], [])
-
-    assert proposal_indices
-    assert validation_indices
-    assert set(proposal_indices).isdisjoint(validation_indices)
-    assert any("B" in profiles[idx].active_fm_ids() for idx in validation_indices)
 
 
 def test_runner_uses_success_proxy_score() -> None:
