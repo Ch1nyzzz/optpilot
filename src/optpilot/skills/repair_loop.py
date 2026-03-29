@@ -5,13 +5,15 @@ operates on explicit arguments rather than instance state.
 
 Core functions:
 - ``analyze()``  — LLM-based failure analysis
-- ``aevolve()``  — async LLM tool-calling agent loop that modifies the DAG
+- ``aevolve()``  — async multi-candidate DAG mutation generator
 - ``reflect()``  — post-validation failure analysis returning lessons
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import re
 import time
 from datetime import datetime
 from statistics import mean
@@ -22,6 +24,7 @@ from optpilot.config import (
     NEGATIVES_DIR,
     PROJECT_ROOT,
     SKILL_EVOLVE_MAX_TOKENS,
+    SKILL_EVOLVE_NUM_CANDIDATES,
 )
 from optpilot.data.fm_taxonomy_6group import GROUP_DEFINITIONS, GROUP_IDS, GROUP_NAMES
 from optpilot.llm import acall_llm, call_llm_json
@@ -77,6 +80,9 @@ You are an expert multi-agent system (MAS) architect.
 Your task is to fix a diagnosed failure in a Python function `build_dag()` that
 constructs a multi-agent DAG for solving mathematical reasoning problems.
 
+Generate a SMALL diff-based mutation against the current `build_dag()` source.
+Prefer exact search/replace edits over full rewrites.
+
 ## How the Code Works
 The `build_dag()` function returns a dictionary that defines a Directed Acyclic
 Graph (DAG) of agents. The dictionary has these top-level keys:
@@ -118,9 +124,22 @@ Each edge is a dict with:
 8. Introduction content — update to mention new agents
 
 ## Output Format
-Output ONLY the complete modified `build_dag()` function inside a ```python code block.
-Do not output explanations before the code. Do not output diffs.
-After the code block, write a one-line summary of what you changed and why."""
+Preferred format: output one or more exact SEARCH/REPLACE blocks:
+<<<<<<< SEARCH
+... exact old text ...
+=======
+... exact new text ...
+>>>>>>> REPLACE
+
+Rules for SEARCH/REPLACE blocks:
+- SEARCH text must match the current code exactly.
+- Keep edits local and minimal.
+- Use multiple blocks if needed.
+
+Fallback format: if a local diff is impossible, output the complete modified
+`build_dag()` function inside a ```python code block.
+
+After the edits, write one short summary line describing the mutation."""
 
 _DIRECT_GEN_USER_PROMPT = """\
 ## Current Code
@@ -141,10 +160,17 @@ Affected agents: {agents}
 ## Recommended Repair Direction (from Jacobian experience matrix)
 {recommended_pattern_text}
 
+## Prior Modifications In This Round
+{history_text}
+
 ## Failed Approaches — DO NOT repeat these
 {negatives_text}
 
-Fix the diagnosed problem. Output the complete modified `build_dag()` function."""
+## Candidate Style
+{candidate_style}
+
+Fix the diagnosed problem with a local mutation first. Prefer SEARCH/REPLACE
+blocks over full rewrites."""
 
 _REFLECT_PROMPT = """\
 You are analyzing why a MAS repair attempt failed to resolve **{fm_name}** problems.
@@ -283,6 +309,7 @@ def build_synthetic_insight(
     after_pass: float,
     failure_reason: str,
     lesson: str,
+    metadata: dict[str, Any] | None = None,
 ) -> ReflectInsight:
     """Create a ReflectInsight without calling the LLM."""
     changes = []
@@ -301,6 +328,7 @@ def build_synthetic_insight(
         failure_reason=failure_reason,
         lesson=lesson,
         timestamp=datetime.now().isoformat(),
+        metadata=metadata or {},
     )
 
 
@@ -427,6 +455,264 @@ def _extract_change_summary(response: str) -> str:
     return ""
 
 
+def extract_search_replace_blocks(response: str) -> list[tuple[str, str]]:
+    """Extract exact SEARCH/REPLACE blocks from a model response."""
+    pattern = re.compile(
+        r"<<<<<<< SEARCH\n(.*?)\n=======\n(.*?)\n>>>>>>> REPLACE",
+        re.DOTALL,
+    )
+    return [(search, replace) for search, replace in pattern.findall(response)]
+
+
+def apply_search_replace_blocks(source: str, blocks: list[tuple[str, str]]) -> str:
+    """Apply exact SEARCH/REPLACE blocks sequentially."""
+    updated = source
+    for search, replace in blocks:
+        matches = updated.count(search)
+        if matches != 1:
+            raise ValueError(
+                f"Expected exactly one match for SEARCH block, found {matches}."
+            )
+        updated = updated.replace(search, replace, 1)
+    return updated
+
+
+def _response_to_evolve_result(
+    *,
+    response: str,
+    current_dag: MASDAG,
+    current_code: str,
+    fm_group: str,
+    analysis: AnalysisResult,
+    negatives: list[ReflectInsight],
+    prompt: str,
+    recommended_pattern: Any | None = None,
+    candidate_index: int = 0,
+    candidate_style: str = "",
+) -> EvolveResult:
+    """Convert one LLM response into an EvolveResult."""
+    code = ""
+    actions_taken: list[str] = []
+
+    blocks = extract_search_replace_blocks(response)
+    if blocks:
+        try:
+            code = apply_search_replace_blocks(current_code, blocks)
+            actions_taken = [f"Applied SEARCH/REPLACE block {i + 1}" for i in range(len(blocks))]
+        except ValueError as e:
+            return EvolveResult(
+                dag=current_dag,
+                analysis_text="",
+                modified_source="",
+                change_description=f"Diff mutation failed to apply: {e}",
+                actions_taken=[],
+                metadata={
+                    "invalid_evolve_reason": f"Diff apply error: {e}",
+                    "assigned_pattern_id": recommended_pattern.pattern_id if recommended_pattern else "",
+                    "candidate_index": candidate_index,
+                    "candidate_style": candidate_style,
+                },
+            )
+    else:
+        code = extract_python_code(response)
+        if not code:
+            return EvolveResult(
+                dag=current_dag,
+                analysis_text="",
+                modified_source="",
+                change_description="LLM response contained no diff blocks or Python code.",
+                actions_taken=[],
+                metadata={
+                    "invalid_evolve_reason": "No Python code block found in LLM response (and no SEARCH/REPLACE blocks were provided).",
+                    "assigned_pattern_id": recommended_pattern.pattern_id if recommended_pattern else "",
+                    "candidate_index": candidate_index,
+                    "candidate_style": candidate_style,
+                },
+            )
+        actions_taken = ["Applied full build_dag rewrite fallback"]
+
+    try:
+        new_dag = python_source_to_dag(code)
+    except ValueError as e:
+        return EvolveResult(
+            dag=current_dag,
+            analysis_text="",
+            modified_source=code,
+            change_description=f"Generated code failed to parse: {e}",
+            actions_taken=actions_taken,
+            metadata={
+                "invalid_evolve_reason": f"Code parse error: {e}",
+                "assigned_pattern_id": recommended_pattern.pattern_id if recommended_pattern else "",
+                "candidate_index": candidate_index,
+                "candidate_style": candidate_style,
+            },
+        )
+
+    has_verifier = any("verif" in nid.lower() for nid in new_dag.agent_nodes)
+    if not has_verifier:
+        return EvolveResult(
+            dag=current_dag,
+            analysis_text="",
+            modified_source=code,
+            change_description="Verification agent was deleted (constraint violation).",
+            actions_taken=actions_taken,
+            metadata={
+                "invalid_evolve_reason": "Verification agent deleted.",
+                "assigned_pattern_id": recommended_pattern.pattern_id if recommended_pattern else "",
+                "candidate_index": candidate_index,
+                "candidate_style": candidate_style,
+            },
+        )
+
+    change_summary = _extract_change_summary(response)
+    if not change_summary:
+        change_summary = f"Candidate {candidate_index + 1} mutation for FM group {fm_group}"
+
+    trace_path = _persist_generation_trace(
+        fm_group=fm_group,
+        analysis=analysis,
+        negatives=negatives,
+        prompt=prompt,
+        response=response,
+        code=code,
+    )
+
+    return EvolveResult(
+        dag=new_dag,
+        analysis_text=change_summary,
+        modified_source=code,
+        change_description=change_summary,
+        actions_taken=actions_taken,
+        metadata={
+            "invalid_evolve_reason": "",
+            "generation_trace_path": trace_path,
+            "assigned_pattern_id": recommended_pattern.pattern_id if recommended_pattern else "",
+            "observed_pattern_id": infer_observed_pattern_from_dags(current_dag, new_dag),
+            "candidate_index": candidate_index,
+            "candidate_style": candidate_style,
+        },
+    )
+
+
+async def agenerate_evolve_candidates(
+    dag: MASDAG,
+    fm_group: str,
+    analysis: AnalysisResult,
+    negatives: list[ReflectInsight],
+    history: list[EvolveResult],
+    recommended_pattern: Any | None = None,
+    recommended_patterns: list[Any | None] | None = None,
+    traces: list[MASTrace] | None = None,
+    profiles: list[FMProfile] | None = None,
+    num_candidates: int = SKILL_EVOLVE_NUM_CANDIDATES,
+) -> list[EvolveResult]:
+    """Generate multiple diff-based mutation candidates for the current DAG."""
+    fm_info = GROUP_DEFINITIONS[fm_group]
+    current_code = dag_to_python(dag)
+
+    performance_summary = "No performance data available."
+    if traces and profiles:
+        performance_summary = build_performance_summary(traces, profiles)
+
+    recommended_pattern_text = "No specific recommendation. Use your best judgment."
+    if recommended_pattern is not None:
+        recommended_pattern_text = (
+            f"**{recommended_pattern.name}** (pattern: {recommended_pattern.pattern_id})\n"
+            f"{recommended_pattern.description}\n"
+            f"This repair direction has been effective for similar failures. "
+            f"Prioritize this approach, but adapt based on the diagnosis."
+        )
+
+    candidate_styles = [
+        "Mutate the routing topology with the smallest possible edge-level edit.",
+        "Mutate prompts and control conditions conservatively; avoid adding new nodes unless necessary.",
+        "Target context preservation explicitly; prefer edits that retain the original task prompt downstream.",
+        "Target loop-breaking or verification hardening with one compact structural change.",
+    ]
+    history_text = format_history(history)
+    assigned_patterns: list[Any | None]
+    if recommended_patterns is not None:
+        assigned_patterns = list(recommended_patterns)
+    else:
+        assigned_patterns = [recommended_pattern] * max(1, num_candidates)
+    if not assigned_patterns:
+        assigned_patterns = [None]
+
+    async def _generate_one(candidate_index: int, candidate_pattern: Any | None) -> EvolveResult:
+        candidate_style = candidate_styles[candidate_index % len(candidate_styles)]
+        pattern_text = recommended_pattern_text
+        if candidate_pattern is None:
+            pattern_text = (
+                "No specific recommendation for this candidate. Explore a plausible repair "
+                "direction that differs meaningfully from the recommended patterns."
+            )
+        else:
+            pattern_text = (
+                f"**{candidate_pattern.name}** (pattern: {candidate_pattern.pattern_id})\n"
+                f"{candidate_pattern.description}\n"
+                f"This repair direction has been effective for similar failures. "
+                f"Prioritize this approach, but adapt based on the diagnosis."
+            )
+        user_prompt = _DIRECT_GEN_USER_PROMPT.format(
+            current_code=current_code,
+            performance_summary=performance_summary,
+            fm_name=fm_info["name"],
+            fm_rate=analysis.fm_rate,
+            fm_description=fm_info["description"],
+            root_causes=", ".join(analysis.root_cause_clusters) or "unknown",
+            dag_components=", ".join(analysis.metadata.get("dag_components", [])) or "unknown",
+            agents=", ".join(analysis.common_agents) or "unknown",
+            recommended_pattern_text=pattern_text,
+            history_text=history_text,
+            negatives_text=format_negatives(negatives),
+            candidate_style=f"Candidate {candidate_index + 1}: {candidate_style}",
+        )
+        messages = [
+            {"role": "system", "content": _DIRECT_GEN_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+        response = await acall_llm(
+            messages=messages,
+            max_tokens=SKILL_EVOLVE_MAX_TOKENS,
+            temperature=min(0.75, 0.35 + 0.1 * candidate_index),
+        )
+        return _response_to_evolve_result(
+            response=response,
+            current_dag=dag,
+            current_code=current_code,
+            fm_group=fm_group,
+            analysis=analysis,
+            negatives=negatives,
+            prompt=user_prompt,
+            recommended_pattern=candidate_pattern,
+            candidate_index=candidate_index,
+            candidate_style=candidate_style,
+        )
+
+    raw_candidates = await asyncio.gather(
+        *[
+            _generate_one(i, assigned_patterns[i])
+            for i in range(len(assigned_patterns))
+        ]
+    )
+
+    deduped: list[EvolveResult] = []
+    seen_keys: set[str] = set()
+    for candidate in raw_candidates:
+        invalid_reason = str(candidate.metadata.get("invalid_evolve_reason", ""))
+        if not invalid_reason and hasattr(candidate.dag, "canonical_dict"):
+            key = json.dumps(candidate.dag.canonical_dict(), sort_keys=True, ensure_ascii=False)
+        elif candidate.modified_source:
+            key = candidate.modified_source
+        else:
+            key = invalid_reason or candidate.change_description
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
 async def aevolve(
     dag: MASDAG,
     fm_group: str,
@@ -437,117 +723,25 @@ async def aevolve(
     traces: list[MASTrace] | None = None,
     profiles: list[FMProfile] | None = None,
 ) -> EvolveResult:
-    """Direct code generation: single LLM call outputs a complete build_dag()."""
-    fm_info = GROUP_DEFINITIONS[fm_group]
-    current_code = dag_to_python(dag)
-
-    # Performance summary
-    performance_summary = "No performance data available."
-    if traces and profiles:
-        performance_summary = build_performance_summary(traces, profiles)
-
-    # Recommended pattern text
-    recommended_pattern_text = "No specific recommendation. Use your best judgment."
-    if recommended_pattern is not None:
-        recommended_pattern_text = (
-            f"**{recommended_pattern.name}** (pattern: {recommended_pattern.pattern_id})\n"
-            f"{recommended_pattern.description}\n"
-            f"This repair direction has been effective for similar failures. "
-            f"Prioritize this approach, but adapt based on the diagnosis."
-        )
-
-    user_prompt = _DIRECT_GEN_USER_PROMPT.format(
-        current_code=current_code,
-        performance_summary=performance_summary,
-        fm_name=fm_info["name"],
-        fm_rate=analysis.fm_rate,
-        fm_description=fm_info["description"],
-        root_causes=", ".join(analysis.root_cause_clusters) or "unknown",
-        dag_components=", ".join(analysis.metadata.get("dag_components", [])) or "unknown",
-        agents=", ".join(analysis.common_agents) or "unknown",
-        recommended_pattern_text=recommended_pattern_text,
-        negatives_text=format_negatives(negatives),
+    """Backward-compatible wrapper that returns the first generated candidate."""
+    candidates = await agenerate_evolve_candidates(
+        dag,
+        fm_group,
+        analysis,
+        negatives,
+        history,
+        recommended_pattern=recommended_pattern,
+        traces=traces,
+        profiles=profiles,
     )
-
-    messages = [
-        {"role": "system", "content": _DIRECT_GEN_SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
-    ]
-
-    response = await acall_llm(
-        messages=messages,
-        max_tokens=SKILL_EVOLVE_MAX_TOKENS,
-        temperature=0.7,
-    )
-
-    # Extract code from response
-    code = extract_python_code(response)
-    if not code:
-        return EvolveResult(
-            dag=dag,
-            analysis_text="",
-            modified_source="",
-            change_description="LLM response contained no Python code block.",
-            metadata={
-                "invalid_evolve_reason": "No Python code block found in LLM response.",
-                "assigned_pattern_id": recommended_pattern.pattern_id if recommended_pattern else "",
-            },
-        )
-
-    # Parse code into MASDAG
-    try:
-        new_dag = python_source_to_dag(code)
-    except ValueError as e:
-        return EvolveResult(
-            dag=dag,
-            analysis_text="",
-            modified_source=code,
-            change_description=f"Generated code failed to parse: {e}",
-            metadata={
-                "invalid_evolve_reason": f"Code parse error: {e}",
-                "assigned_pattern_id": recommended_pattern.pattern_id if recommended_pattern else "",
-            },
-        )
-
-    # Constraint: must keep at least one verification agent
-    has_verifier = any("verif" in nid.lower() for nid in new_dag.agent_nodes)
-    if not has_verifier:
-        return EvolveResult(
-            dag=dag,
-            analysis_text="",
-            modified_source=code,
-            change_description="Verification agent was deleted (constraint violation).",
-            metadata={
-                "invalid_evolve_reason": "Verification agent deleted.",
-                "assigned_pattern_id": recommended_pattern.pattern_id if recommended_pattern else "",
-            },
-        )
-
-    change_summary = _extract_change_summary(response)
-    if not change_summary:
-        change_summary = f"Direct code generation for FM group {fm_group}"
-
-    # Persist the generation trace
-    trace_path = _persist_generation_trace(
-        fm_group=fm_group,
-        analysis=analysis,
-        negatives=negatives,
-        prompt=user_prompt,
-        response=response,
-        code=code,
-    )
-
+    if candidates:
+        return candidates[0]
     return EvolveResult(
-        dag=new_dag,
-        analysis_text=change_summary,
-        modified_source=code,
-        change_description=change_summary,
-        metadata={
-            "invalid_evolve_reason": "",
-            "generation_trace_path": trace_path,
-            "assigned_pattern_id": recommended_pattern.pattern_id if recommended_pattern else "",
-            "observed_pattern_id": infer_observed_pattern_from_dags(dag, new_dag),
-        },
+        dag=dag,
+        analysis_text="",
+        modified_source="",
+        change_description="Candidate generation returned no results.",
+        metadata={"invalid_evolve_reason": "Candidate generation returned no results."},
     )
 
 
@@ -588,6 +782,7 @@ def reflect(
         failure_reason=result.get("failure_reason", "Unknown"),
         lesson=result.get("lesson", "Unknown"),
         timestamp=datetime.now().isoformat(),
+        metadata={},
     )
 
 

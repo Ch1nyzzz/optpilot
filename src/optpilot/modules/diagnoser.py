@@ -59,6 +59,7 @@ Return ONLY valid JSON with this exact schema:
   "D": false,
   "E": false,
   "F": false,
+  "primary_failure_group": "none",
   "primary_turning_point": "",
   "evidence_snippet": "",
   "rationale": ""
@@ -72,6 +73,9 @@ Instructions:
 - Read the full trace carefully.
 - Decide whether each label A-F is true or false.
 - If the trace completes normally and no clear failure appears, return all false.
+- If one or more labels are true, you MUST choose exactly one `primary_failure_group`
+  from A-F as the single dominant root cause that best explains why this task failed.
+- If no failure exists, set `primary_failure_group` to "none".
 - `primary_turning_point` should be the first step where failure becomes clearly visible. If no failure exists, write "none".
 - `evidence_snippet` should be a short quote or short summary of the key evidence.
 - `rationale` should be 1-3 sentences only.
@@ -127,30 +131,15 @@ class Diagnoser:
 
     def classify(self, trace: MASTrace, model: str | None = None) -> dict[str, bool]:
         """Classify a trace into 6-group labels. Returns {"A": bool, ..., "F": bool}."""
-        trace_content = _prepare_trace_content(trace.trajectory)
-        kwargs = {}
-        if model:
-            kwargs["model"] = model
-        try:
-            result = call_llm_json(
-                [
-                    {"role": "system", "content": CLASSIFICATION_PROMPT},
-                    {"role": "user", "content": CLASSIFICATION_USER_TEMPLATE.format(trace_content=trace_content)},
-                ],
-                max_tokens=4096,
-                **kwargs,
-            )
-            return {gid: bool(result.get(gid, False)) for gid in GROUP_IDS}
-        except Exception as e:
-            print(f"  Warning: classify failed for trace {trace.trace_id}: {e}")
-            return {gid: False for gid in GROUP_IDS}
+        result = self._classify_raw(trace, model=model)
+        return {gid: bool(result.get(gid, False)) for gid in GROUP_IDS}
 
     def diagnose(self, trace: MASTrace, target_group: str | None = None) -> FMProfile:
         """Diagnose a trace: classify 6-group labels + localize active groups."""
         profile = self._build_profile(trace)
         groups_to_localize = (
             [target_group] if target_group and target_group in profile.active_fm_ids()
-            else profile.active_fm_ids()
+            else ([profile.primary_failure_id()] if profile.primary_failure_id() else [])
         )
         if not groups_to_localize:
             return profile
@@ -164,6 +153,8 @@ class Diagnoser:
             for fut in as_completed(futures):
                 gid = futures[fut]
                 profile.localization[gid] = fut.result()
+                if gid == profile.primary_failure_id():
+                    profile.primary_localization = profile.localization[gid]
         return profile
 
     async def adiagnose(self, trace: MASTrace, target_group: str | None = None) -> FMProfile:
@@ -171,7 +162,7 @@ class Diagnoser:
         profile = await self._abuild_profile(trace)
         groups_to_localize = (
             [target_group] if target_group and target_group in profile.active_fm_ids()
-            else profile.active_fm_ids()
+            else ([profile.primary_failure_id()] if profile.primary_failure_id() else [])
         )
         if not groups_to_localize:
             return profile
@@ -186,6 +177,8 @@ class Diagnoser:
         results = await asyncio.gather(*(localize(gid) for gid in groups_to_localize))
         for gid, loc in results:
             profile.localization[gid] = loc
+            if gid == profile.primary_failure_id():
+                profile.primary_localization = loc
         return profile
 
     def diagnose_batch(self, traces: list[MASTrace], target_group: str | None = None) -> list[FMProfile]:
@@ -264,36 +257,26 @@ class Diagnoser:
 
     # --- internal ---
 
-    def _build_profile(self, trace: MASTrace) -> FMProfile:
-        """Classify and build FMProfile."""
-        labels_dict = self.classify(trace)
-        profile = FMProfile(trace_id=trace.trace_id)
-        for gid in GROUP_IDS:
-            gdef = GROUP_DEFINITIONS[gid]
-            profile.labels[gid] = FMLabel(
-                fm_id=gid,
-                fm_name=gdef["name"],
-                category=gid,
-                present=labels_dict.get(gid, False),
+    def _classify_raw(self, trace: MASTrace, model: str | None = None) -> dict[str, object]:
+        trace_content = _prepare_trace_content(trace.trajectory)
+        kwargs = {}
+        if model:
+            kwargs["model"] = model
+        try:
+            result = call_llm_json(
+                [
+                    {"role": "system", "content": CLASSIFICATION_PROMPT},
+                    {"role": "user", "content": CLASSIFICATION_USER_TEMPLATE.format(trace_content=trace_content)},
+                ],
+                max_tokens=4096,
+                **kwargs,
             )
-        return profile
+            return result if isinstance(result, dict) else {}
+        except Exception as e:
+            print(f"  Warning: classify failed for trace {trace.trace_id}: {e}")
+            return {}
 
-    async def _abuild_profile(self, trace: MASTrace) -> FMProfile:
-        """Async classify and build FMProfile."""
-        labels_dict = await self._aclassify(trace)
-        profile = FMProfile(trace_id=trace.trace_id)
-        for gid in GROUP_IDS:
-            gdef = GROUP_DEFINITIONS[gid]
-            profile.labels[gid] = FMLabel(
-                fm_id=gid,
-                fm_name=gdef["name"],
-                category=gid,
-                present=labels_dict.get(gid, False),
-            )
-        return profile
-
-    async def _aclassify(self, trace: MASTrace, model: str | None = None) -> dict[str, bool]:
-        """Async 6-group classification."""
+    async def _aclassify_raw(self, trace: MASTrace, model: str | None = None) -> dict[str, object]:
         trace_content = _prepare_trace_content(trace.trajectory)
         kwargs = {}
         if model:
@@ -307,10 +290,52 @@ class Diagnoser:
                 max_tokens=4096,
                 **kwargs,
             )
-            return {gid: bool(result.get(gid, False)) for gid in GROUP_IDS}
+            return result if isinstance(result, dict) else {}
         except Exception as e:
             print(f"  Warning: async classify failed for trace {trace.trace_id}: {e}")
-            return {gid: False for gid in GROUP_IDS}
+            return {}
+
+    def _resolve_primary_group(self, result: dict[str, object]) -> str:
+        active = [gid for gid in GROUP_IDS if bool(result.get(gid, False))]
+        raw_primary = str(result.get("primary_failure_group", "")).strip().upper()
+        if raw_primary in active:
+            return raw_primary
+        return active[0] if active else ""
+
+    def _build_profile(self, trace: MASTrace) -> FMProfile:
+        """Classify and build FMProfile."""
+        result = self._classify_raw(trace)
+        labels_dict = {gid: bool(result.get(gid, False)) for gid in GROUP_IDS}
+        profile = FMProfile(trace_id=trace.trace_id, primary_fm_id=self._resolve_primary_group(result))
+        for gid in GROUP_IDS:
+            gdef = GROUP_DEFINITIONS[gid]
+            profile.labels[gid] = FMLabel(
+                fm_id=gid,
+                fm_name=gdef["name"],
+                category=gid,
+                present=labels_dict.get(gid, False),
+            )
+        return profile
+
+    async def _abuild_profile(self, trace: MASTrace) -> FMProfile:
+        """Async classify and build FMProfile."""
+        result = await self._aclassify_raw(trace)
+        labels_dict = {gid: bool(result.get(gid, False)) for gid in GROUP_IDS}
+        profile = FMProfile(trace_id=trace.trace_id, primary_fm_id=self._resolve_primary_group(result))
+        for gid in GROUP_IDS:
+            gdef = GROUP_DEFINITIONS[gid]
+            profile.labels[gid] = FMLabel(
+                fm_id=gid,
+                fm_name=gdef["name"],
+                category=gid,
+                present=labels_dict.get(gid, False),
+            )
+        return profile
+
+    async def _aclassify(self, trace: MASTrace, model: str | None = None) -> dict[str, bool]:
+        """Async 6-group classification."""
+        result = await self._aclassify_raw(trace, model=model)
+        return {gid: bool(result.get(gid, False)) for gid in GROUP_IDS}
 
     def _localize_group(self, trace: MASTrace, group_id: str, trace_content: str) -> FMLocalization:
         gdef = GROUP_DEFINITIONS[group_id]

@@ -14,7 +14,8 @@ optpilot/
 │   ├── registry.py            # Runner factory
 │   ├── tracking.py            # Experiment tracking (W&B integration)
 │   ├── skills/                # Repair loop and pattern catalog
-│   │   ├── repair_loop.py     # Stateless functions: analyze(), aevolve(), reflect()
+│   │   ├── repair_loop.py     # Stateless functions: analyze(), multi-candidate
+│   │   │                      #   aevolve(), reflect()
 │   │   ├── tools.py           # ToolContext, search_and_replace/bash tools,
 │   │   │                      #   dag_to_python(), python_source_to_dag()
 │   │   ├── repair_patterns.py # FailureSignature, RepairPattern, PatternCatalog (JSON-persisted)
@@ -61,6 +62,10 @@ optpilot/
 └── memory_bank/               # Project documentation
 ```
 
+版本管理约定：
+- `logs/`、`results/`、`library_store/skill_agent_traces/`、`library_store/meta_evolve_traces/` 为运行生成物，默认不纳入 Git。
+- `library_store/pattern_catalog.json` 属于可演化算法知识库，可按需要随代码一并版本化。
+
 ## Core Architecture: MAS-as-DAG
 
 任何 MAS 系统统一表示为 MASDAG（有向图，支持循环）：
@@ -104,19 +109,16 @@ Orchestrator.aoptimize():
 
       pattern = jacobian.recommend(signature)                   # 经验驱动选修复方向
       analysis = analyze(dag, incumbent_traces, incumbent_profiles)
-      result = aevolve(dag, analysis, pattern)                 # LLM 修 DAG
-
-      candidate_traces = run(result.dag, fixed_eval_tasks)     # 每轮只评估新候选一次
-      candidate_profiles = classify(candidate_traces)
-      candidate_score = fitness(candidate_traces, candidate_profiles)
+      candidates = aevolve(dag, analysis, pattern)             # 生成多候选局部 mutation
+      best = argmax_fitness(candidates, fixed_eval_tasks)      # minibatch 选最优候选
 
       jacobian.update(outcome)                                 # 累积经验
 
-      if candidate_score > incumbent_score:
-          dag = result.dag
-          incumbent_traces = candidate_traces
-          incumbent_profiles = candidate_profiles
-          incumbent_score = candidate_score
+      if best.score > incumbent_score:
+          dag = best.dag
+          incumbent_traces = best.traces
+          incumbent_profiles = best.profiles
+          incumbent_score = best.score
       else:
           insight = reflect(...)                               # 反思教训
           negatives.append(insight)
@@ -128,7 +130,7 @@ Orchestrator.aoptimize():
 | 模块 | 文件 | 职责 |
 |------|------|------|
 | **Orchestrator** | `orchestrator.py` | 单循环控制器：诊断 → 推荐 → 修复 → 评估 |
-| **repair_loop** | `skills/repair_loop.py` | 无状态函数：`analyze()`, `aevolve()`, `reflect()` |
+| **repair_loop** | `skills/repair_loop.py` | 无状态函数：`analyze()`, 多候选 diff-mutation `aevolve()`, `reflect()` |
 | **PatternCatalog** | `skills/repair_patterns.py` | 动态修复模式目录，JSON 持久化，支持运行时增删改 |
 | **RepairJacobian** | `skills/jacobian.py` | (FM group × 修复模式) → 成功率矩阵 |
 | **CatalogEvolver** | `skills/evolution.py` | 当 pattern 反复失败 → LLM 改进 catalog |
@@ -136,10 +138,21 @@ Orchestrator.aoptimize():
 
 ### Online Eval Protocol
 
-- **固定 eval 子集**: 若设置 `eval_tasks_per_round`，取 train task 的固定前缀子集，所有 round 复用同一批 online eval task
-- **单次候选评估**: 每轮只运行一次 candidate DAG；当前 incumbent 的 traces / profiles / score 在 round 之间缓存
-- **Adopt 准则**: 仅当 candidate fitness 严格高于 incumbent fitness 时才采纳
-- **与 OpenEvolve 对齐**: online 阶段不做 “同轮 before/after 双跑”，而是 baseline 初始化一次 + 后续每轮只评估新候选
+- **在线 active eval**: 若设置 `eval_tasks_per_round`，每轮从 train task 中按 benchmark 做均匀平衡抽样，避免固定前缀子集导致的系统性过拟合
+- **候选池评估**: 默认每轮 1 个候选，直接绑定 Jacobian top-1 pattern。这样一轮只评估一个新 DAG，再决定是否采纳，轮次语义与 OpenEvolve 的单 candidate iteration 对齐
+- **Shadow gate**: 每 5 轮额外抽一个不与 active 重叠的 balanced shadow batch；shadow 只比较正确率（accuracy），不再比较 combined fitness
+- **Shadow-triggered meta evolve**: 若同一 FM group 连续 3 次在 shadow gate 被拒绝，触发一次 catalog meta-evolution；普通 active-only 失败不再直接触发 meta evolve
+- **Diagnosis-driven meta evolve**: shadow gate 被拒绝时，会对回退样本生成结构化 diagnosis bundle（primary FM、root cause、agent、dag_component、候选改动摘要）；CatalogEvolver 必须先读这份 bundle，再判断为什么候选没成功、应如何调整 pattern catalog
+- **Adopt 准则**: 仅当 best candidate fitness 严格高于 incumbent fitness 时才采纳
+- **与 OpenEvolve 对齐**: online 阶段不做 “同轮 before/after 双跑”，而是 baseline 初始化一次 + 后续每轮只评估新候选；OpenEvolve baseline 侧显式将 `max_parallel_iterations` 设为 1，避免并发 iteration 带来的吞吐对齐但轮次语义不对齐
+- **OpenEvolve split 对齐**: `run_ag2_mathchat_openevolve.py` 显式把 train-side eval prompts 传给 evaluator，避免 evaluator 自己回退到全集前缀样本
+
+### Diagnosis Semantics
+
+- **单题唯一主因**: `Diagnoser` 仍保留 A-F 多标签作为辅助诊断信息，但会额外为每条失败 trace 选出唯一一个 `primary_fm_id`
+- **单题唯一 root cause**: localization 默认只对这个 `primary_fm_id` 执行，因此每道错题只有一个主 root cause，保存在 `FMProfile.primary_localization`
+- **优化目标对齐**: `rank_fm_groups()` 和 `extract_failure_signatures()` 现在按 `primary_fm_id` 计数，不再让同一道题同时给多个 FM 贡献支持度
+- **持久化兼容**: diagnose artifact 会额外保存 `primary_fm_id` 和 `primary_localization`，复用 diagnose 目录时保持同样语义
 
 ### Repair Jacobian 系统
 
@@ -150,6 +163,7 @@ Orchestrator.aoptimize():
 - **PatternCatalog**: 动态 pattern 目录，加载/保存 JSON，支持 `add_pattern()` / `update_pattern()` / `effective` 标记
 - **RepairJacobian**: 矩阵存储 + 推荐 + 更新，持久化到 `library_store/jacobian/`
 - **冷启动**: 按 FM group 使用启发式 prior 打分（例如 B 偏 loop，C/D 偏 context/edge，F 偏 verification）
+- **推荐冷却**: 同一 FM group 下若某个 assigned pattern 连续失败达到阈值，下一轮临时 cooldown 1 轮，避免反复推荐同一方向
 - **Observed attribution**: online 不依赖 LLM 解释编辑；而是对 `old_dag -> new_dag` 做确定性结构差分，再映射成有限 pattern family
 - **数据驱动**: 随经验积累，贝叶斯混合逐渐从 prior 过渡到经验 success_rate
 
@@ -183,10 +197,11 @@ FM Classifier: MiniMax M2.5（100 条 blind trace 校准，与人类专家容忍
 
 ## AG2 MathChat DAG
 
-基于 MAST 论文 Appendix L 的官方 3-agent GroupChat：
+基于 MAST Appendix L 改成更稳定的 context-preserving 3-agent workflow：
 - `dags/ag2_mathchat.yaml`
 - Agents: Agent_Problem_Solver, Agent_Code_Executor, Agent_Verifier
-- Turn Counter (max=5)，仅 `loop: exit` 边到 FINAL（被动计数器，count < max 时不触发下游）
+- Routing: `Problem_Solver -> Code_Executor -> Verifier`
+- Context preservation: USER 原题面通过非触发边预加载到三个 agent；Verifier 不再把 speaker-routing 文本回灌给下游 agent
 - 终止: `SOLUTION_FOUND` 关键词 → FINAL
 
 ## Official Benchmarks

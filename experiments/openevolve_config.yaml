@@ -113,3 +113,4 @@ evaluator:
 
 diff_based_generation: true
 max_solution_length: 60000
+max_parallel_iterations: 1

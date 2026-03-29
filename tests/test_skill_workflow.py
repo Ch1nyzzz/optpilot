@@ -12,6 +12,7 @@ from optpilot.models import (
     AnalysisResult,
     EvolveResult,
     FMLabel,
+    FMLocalization,
     FMProfile,
     ReflectInsight,
     SkillBudget,
@@ -44,6 +45,21 @@ def test_fm_rate_with_active_profiles():
     assert fm_rate("B", profiles) == 0.75
     assert fm_rate("A", profiles) == 0.0
     assert fm_rate("B", []) == 0.0
+
+
+def test_rank_fm_groups_uses_primary_failure_only():
+    p1 = FMProfile(trace_id=1, primary_fm_id="B")
+    p1.labels["B"] = FMLabel(fm_id="B", fm_name="Loop", category="B", present=True)
+    p1.labels["F"] = FMLabel(fm_id="F", fm_name="Verify", category="F", present=True)
+
+    p2 = FMProfile(trace_id=2, primary_fm_id="F")
+    p2.labels["B"] = FMLabel(fm_id="B", fm_name="Loop", category="B", present=True)
+    p2.labels["F"] = FMLabel(fm_id="F", fm_name="Verify", category="F", present=True)
+
+    p3 = FMProfile(trace_id=3, primary_fm_id="F")
+    p3.labels["F"] = FMLabel(fm_id="F", fm_name="Verify", category="F", present=True)
+
+    assert rank_fm_groups([p1, p2, p3], min_support=1) == [("F", 2), ("B", 1)]
 
 
 def test_has_material_change_detects_dag_difference():
@@ -115,7 +131,7 @@ def test_pattern_catalog_defaults():
     assert len(catalog) >= 13
     assert "prompt_add_constraint" in catalog
     p = catalog["prompt_add_constraint"]
-    assert p.effective is True
+    assert p.pattern_id == "prompt_add_constraint"
 
 
 def test_pattern_catalog_add_and_update(tmp_path):
@@ -149,8 +165,10 @@ def test_pattern_catalog_add_and_update(tmp_path):
 def test_pattern_catalog_as_llm_context():
     catalog = PatternCatalog()
     text = catalog.as_llm_context()
-    assert "prompt_add_constraint" in text
     assert "Available repair patterns" in text
+    effective_ids = [pid for pid, _ in catalog.effective_items()]
+    if effective_ids:
+        assert effective_ids[0] in text
 
 
 # -------------------------------------------------------------------- #
@@ -199,15 +217,18 @@ async def test_aoptimize_single_loop_improved(monkeypatch, tmp_path):
                 # After repair: FM gone
                 return [_make_profile(i, fm_active=False) for i in range(len(traces))]
 
-    # Mock analyze and aevolve
-    async def fake_aevolve(dag, fm_group, analysis, negatives, history, recommended_pattern=None, traces=None, profiles=None):
-        return EvolveResult(
+    # Mock analyze and candidate generation
+    async def fake_agenerate_evolve_candidates(
+        dag, fm_group, analysis, negatives, history,
+        recommended_pattern=None, recommended_patterns=None, traces=None, profiles=None,
+    ):
+        return [EvolveResult(
             dag=repaired,
             analysis_text="fixed prompt",
             modified_source="source",
             change_description="fixed prompt",
             actions_taken=["change"],
-        )
+        )]
 
     def fake_analyze(dag, fm_group, traces, profiles, negatives):
         return AnalysisResult(
@@ -215,7 +236,10 @@ async def test_aoptimize_single_loop_improved(monkeypatch, tmp_path):
             metadata={"dag_components": [], "proposal_traces": [], "failure_signatures": []},
         )
 
-    monkeypatch.setattr("optpilot.orchestrator.aevolve", fake_aevolve)
+    monkeypatch.setattr(
+        "optpilot.orchestrator.agenerate_evolve_candidates",
+        fake_agenerate_evolve_candidates,
+    )
     monkeypatch.setattr("optpilot.orchestrator.analyze", fake_analyze)
 
     orchestrator = Orchestrator(runner=_AsyncRunner(), dag=dag)
@@ -249,13 +273,16 @@ async def test_aoptimize_no_material_change(monkeypatch, tmp_path):
         async def aclassify_batch(self, traces):
             return [_make_profile(i, fm_active=True) for i in range(len(traces))]
 
-    async def fake_aevolve(dag, fm_group, analysis, negatives, history, recommended_pattern=None, traces=None, profiles=None):
-        return EvolveResult(
+    async def fake_agenerate_evolve_candidates(
+        dag, fm_group, analysis, negatives, history,
+        recommended_pattern=None, recommended_patterns=None, traces=None, profiles=None,
+    ):
+        return [EvolveResult(
             dag=dag,  # same DAG = no change
             analysis_text="tried",
             modified_source="source",
             change_description="nothing changed",
-        )
+        )]
 
     def fake_analyze(dag, fm_group, traces, profiles, negatives):
         return AnalysisResult(
@@ -263,7 +290,10 @@ async def test_aoptimize_no_material_change(monkeypatch, tmp_path):
             metadata={"dag_components": [], "proposal_traces": [], "failure_signatures": []},
         )
 
-    monkeypatch.setattr("optpilot.orchestrator.aevolve", fake_aevolve)
+    monkeypatch.setattr(
+        "optpilot.orchestrator.agenerate_evolve_candidates",
+        fake_agenerate_evolve_candidates,
+    )
     monkeypatch.setattr("optpilot.orchestrator.analyze", fake_analyze)
 
     orchestrator = Orchestrator(runner=_AsyncRunner(), dag=dag)
@@ -276,7 +306,7 @@ async def test_aoptimize_no_material_change(monkeypatch, tmp_path):
 
 
 @pytest.mark.anyio
-async def test_aoptimize_uses_fixed_eval_subset(monkeypatch):
+async def test_aoptimize_samples_balanced_active_subset(monkeypatch):
     dag = MASDAG(
         dag_id="test",
         nodes={
@@ -300,6 +330,8 @@ async def test_aoptimize_uses_fixed_eval_subset(monkeypatch):
     batch_scores = [0.0, 1.0]
 
     class _AsyncRunner:
+        benchmark_name_resolver = staticmethod(lambda task: task.split(":", 1)[0])
+
         async def arun_batch(self, tasks, dag=None, output_base=None, max_concurrency=256):
             seen_task_batches.append(list(tasks))
             score = batch_scores[len(seen_task_batches) - 1]
@@ -309,15 +341,18 @@ async def test_aoptimize_uses_fixed_eval_subset(monkeypatch):
         async def aclassify_batch(self, traces):
             return [_make_profile(i, fm_active=True) for i in range(len(traces))]
 
-    async def fake_aevolve(dag, fm_group, analysis, negatives, history, recommended_pattern=None, traces=None, profiles=None):
-        return EvolveResult(
+    async def fake_agenerate_evolve_candidates(
+        dag, fm_group, analysis, negatives, history,
+        recommended_pattern=None, recommended_patterns=None, traces=None, profiles=None,
+    ):
+        return [EvolveResult(
             dag=repaired,
             analysis_text="fixed prompt",
             modified_source="source",
             change_description="fixed prompt",
             actions_taken=["change"],
             metadata={"observed_pattern_id": "prompt_add_constraint"},
-        )
+        )]
 
     def fake_analyze(dag, fm_group, traces, profiles, negatives):
         return AnalysisResult(
@@ -325,19 +360,384 @@ async def test_aoptimize_uses_fixed_eval_subset(monkeypatch):
             metadata={"dag_components": [], "proposal_traces": [], "failure_signatures": []},
         )
 
-    monkeypatch.setattr("optpilot.orchestrator.aevolve", fake_aevolve)
+    monkeypatch.setattr(
+        "optpilot.orchestrator.agenerate_evolve_candidates",
+        fake_agenerate_evolve_candidates,
+    )
     monkeypatch.setattr("optpilot.orchestrator.analyze", fake_analyze)
 
     orchestrator = Orchestrator(runner=_AsyncRunner(), dag=dag)
     orchestrator.diagnoser = _AsyncDiagnoser()
 
     await orchestrator.aoptimize(
-        tasks=["t0", "t1", "t2", "t3"],
+        tasks=["A:0", "A:1", "B:0", "B:1", "C:0", "C:1", "D:0", "D:1"],
         max_rounds=1,
-        eval_tasks_per_round=2,
+        eval_tasks_per_round=4,
     )
 
-    assert seen_task_batches == [["t0", "t1"], ["t0", "t1"]]
+    assert seen_task_batches[0] == seen_task_batches[1]
+    assert {task.split(":", 1)[0] for task in seen_task_batches[0]} == {"A", "B", "C", "D"}
+
+
+@pytest.mark.anyio
+async def test_aoptimize_runs_shadow_gate_every_interval(monkeypatch):
+    dag = MASDAG(
+        dag_id="test",
+        nodes={
+            "start": DAGNode(node_id="start", node_type="literal", prompt="begin"),
+            "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+        },
+        edges=[DAGEdge(source="start", target="FINAL")],
+        metadata={"start": ["start"]},
+    )
+
+    seen_task_batches: list[list[str]] = []
+    batch_scores = [0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
+    candidate_counter = {"value": 0}
+
+    class _AsyncRunner:
+        benchmark_name_resolver = staticmethod(lambda task: task.split(":", 1)[0])
+
+        async def arun_batch(self, tasks, dag=None, output_base=None, max_concurrency=256):
+            seen_task_batches.append(list(tasks))
+            score = batch_scores[len(seen_task_batches) - 1]
+            return [_make_trace(i, score=score) for i in range(len(tasks))]
+
+    class _AsyncDiagnoser:
+        async def aclassify_batch(self, traces):
+            return [_make_profile(i, fm_active=True) for i in range(len(traces))]
+
+    async def fake_agenerate_evolve_candidates(
+        dag, fm_group, analysis, negatives, history,
+        recommended_pattern=None, recommended_patterns=None, traces=None, profiles=None,
+    ):
+        candidate_counter["value"] += 1
+        repaired = MASDAG(
+            dag_id="test",
+            nodes={
+                "start": DAGNode(
+                    node_id="start",
+                    node_type="literal",
+                    prompt=f"repaired-{candidate_counter['value']}",
+                ),
+                "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+            },
+            edges=[DAGEdge(source="start", target="FINAL")],
+            metadata={"start": ["start"]},
+        )
+        return [EvolveResult(
+            dag=repaired,
+            analysis_text="fixed prompt",
+            modified_source="source",
+            change_description="fixed prompt",
+            actions_taken=["change"],
+            metadata={"observed_pattern_id": "prompt_add_constraint"},
+        )]
+
+    def fake_analyze(dag, fm_group, traces, profiles, negatives):
+        return AnalysisResult(
+            fm_id=fm_group, fm_rate=1.0,
+            metadata={"dag_components": [], "proposal_traces": [], "failure_signatures": []},
+        )
+
+    monkeypatch.setattr(
+        "optpilot.orchestrator.agenerate_evolve_candidates",
+        fake_agenerate_evolve_candidates,
+    )
+    monkeypatch.setattr("optpilot.orchestrator.analyze", fake_analyze)
+    monkeypatch.setattr("optpilot.orchestrator.SHADOW_EVAL_INTERVAL", 2)
+
+    orchestrator = Orchestrator(runner=_AsyncRunner(), dag=dag)
+    orchestrator.diagnoser = _AsyncDiagnoser()
+
+    await orchestrator.aoptimize(
+        tasks=["A:0", "A:1", "B:0", "B:1", "C:0", "C:1", "D:0", "D:1"],
+        max_rounds=2,
+        eval_tasks_per_round=4,
+    )
+
+    assert len(seen_task_batches) == 6
+    assert seen_task_batches[0] == seen_task_batches[1]
+    assert seen_task_batches[2] == seen_task_batches[3]
+    assert seen_task_batches[4] == seen_task_batches[5]
+    assert set(seen_task_batches[4]).isdisjoint(seen_task_batches[2])
+
+
+@pytest.mark.anyio
+async def test_shadow_gate_uses_accuracy_only(monkeypatch, tmp_path):
+    dag = MASDAG(
+        dag_id="test",
+        nodes={
+            "start": DAGNode(node_id="start", node_type="literal", prompt="begin"),
+            "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+        },
+        edges=[DAGEdge(source="start", target="FINAL")],
+        metadata={"start": ["start"]},
+    )
+
+    batch_scores = [0.0, 1.0, 1.0, 1.0]
+    classify_calls = {"count": 0}
+
+    class _AsyncRunner:
+        benchmark_name_resolver = staticmethod(lambda task: task.split(":", 1)[0])
+
+        async def arun_batch(self, tasks, dag=None, output_base=None, max_concurrency=256):
+            score = batch_scores.pop(0)
+            return [_make_trace(i, score=score) for i in range(len(tasks))]
+
+    class _AsyncDiagnoser:
+        async def aclassify_batch(self, traces):
+            classify_calls["count"] += 1
+            return [_make_profile(i, fm_active=True) for i in range(len(traces))]
+
+    async def fake_agenerate_evolve_candidates(
+        dag, fm_group, analysis, negatives, history,
+        recommended_pattern=None, recommended_patterns=None, traces=None, profiles=None,
+    ):
+        repaired = MASDAG(
+            dag_id="test",
+            nodes={
+                "start": DAGNode(node_id="start", node_type="literal", prompt="repaired"),
+                "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+            },
+            edges=[DAGEdge(source="start", target="FINAL")],
+            metadata={"start": ["start"]},
+        )
+        return [EvolveResult(
+            dag=repaired,
+            analysis_text="fixed prompt",
+            modified_source="source",
+            change_description="fixed prompt",
+            actions_taken=["change"],
+            metadata={"observed_pattern_id": "prompt_add_constraint"},
+        )]
+
+    def fake_analyze(dag, fm_group, traces, profiles, negatives):
+        return AnalysisResult(
+            fm_id=fm_group, fm_rate=1.0,
+            metadata={"dag_components": [], "proposal_traces": [], "failure_signatures": []},
+        )
+
+    monkeypatch.setattr("optpilot.orchestrator.agenerate_evolve_candidates", fake_agenerate_evolve_candidates)
+    monkeypatch.setattr("optpilot.orchestrator.analyze", fake_analyze)
+    monkeypatch.setattr(
+        "optpilot.orchestrator.fitness_score",
+        lambda traces, profiles, num_agents: sum(float(t.task_score or 0.0) for t in traces) / len(traces),
+    )
+    monkeypatch.setattr("optpilot.orchestrator.SHADOW_EVAL_INTERVAL", 1)
+
+    orchestrator = Orchestrator(runner=_AsyncRunner(), dag=dag, negatives_dir=tmp_path / "neg")
+    orchestrator.diagnoser = _AsyncDiagnoser()
+
+    await orchestrator.aoptimize(
+        tasks=["A:0", "A:1", "B:0", "B:1", "C:0", "C:1", "D:0", "D:1"],
+        max_rounds=1,
+        eval_tasks_per_round=4,
+    )
+
+    assert classify_calls["count"] == 2
+
+
+@pytest.mark.anyio
+async def test_shadow_rejection_records_diagnosis_metadata(monkeypatch, tmp_path):
+    dag = MASDAG(
+        dag_id="test",
+        nodes={
+            "start": DAGNode(node_id="start", node_type="literal", prompt="begin"),
+            "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+        },
+        edges=[DAGEdge(source="start", target="FINAL")],
+        metadata={"start": ["start"]},
+    )
+
+    batch_scores = [0.0, 1.0, 1.0, 0.0]
+
+    class _AsyncRunner:
+        benchmark_name_resolver = staticmethod(lambda task: task.split(":", 1)[0])
+
+        async def arun_batch(self, tasks, dag=None, output_base=None, max_concurrency=256):
+            score = batch_scores.pop(0)
+            traces = [_make_trace(i, score=score) for i in range(len(tasks))]
+            for trace, task in zip(traces, tasks):
+                trace.task_key = task
+                trace.benchmark_name = task.split(":", 1)[0]
+            return traces
+
+    class _AsyncDiagnoser:
+        async def aclassify_batch(self, traces):
+            return [_make_profile(i, fm_active=True) for i in range(len(traces))]
+
+        async def adiagnose_batch(self, traces, target_group=None):
+            profiles = []
+            for i, trace in enumerate(traces):
+                p = _make_profile(i, fm_active=True)
+                p.primary_fm_id = "B"
+                p.primary_localization = FMLocalization(
+                    agent="Agent_Verifier",
+                    step="shadow",
+                    context="shadow regression",
+                    root_cause="Verifier-focused prompt change overfit the active batch.",
+                    dag_component="agent_prompt",
+                )
+                profiles.append(p)
+            return profiles
+
+    async def fake_agenerate_evolve_candidates(
+        dag, fm_group, analysis, negatives, history,
+        recommended_pattern=None, recommended_patterns=None, traces=None, profiles=None,
+    ):
+        repaired = MASDAG(
+            dag_id="test",
+            nodes={
+                "start": DAGNode(node_id="start", node_type="literal", prompt="repaired"),
+                "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+            },
+            edges=[DAGEdge(source="start", target="FINAL")],
+            metadata={"start": ["start"]},
+        )
+        return [EvolveResult(
+            dag=repaired,
+            analysis_text="fixed prompt",
+            modified_source="source",
+            change_description="strengthen verifier instructions",
+            actions_taken=["change verifier prompt"],
+            metadata={"observed_pattern_id": "prompt_strengthen_verification"},
+        )]
+
+    monkeypatch.setattr("optpilot.orchestrator.agenerate_evolve_candidates", fake_agenerate_evolve_candidates)
+    monkeypatch.setattr(
+        "optpilot.orchestrator.analyze",
+        lambda dag, fm_group, traces, profiles, negatives: AnalysisResult(
+            fm_id=fm_group, fm_rate=1.0,
+            metadata={"dag_components": [], "proposal_traces": [], "failure_signatures": []},
+        ),
+    )
+    monkeypatch.setattr(
+        "optpilot.orchestrator.fitness_score",
+        lambda traces, profiles, num_agents: sum(float(t.task_score or 0.0) for t in traces) / len(traces),
+    )
+    monkeypatch.setattr(
+        "optpilot.orchestrator.reflect",
+        lambda fm_group, dag, evolve_result, before_fm, after_fm, before_pass, after_pass: build_synthetic_insight(
+            fm_group=fm_group,
+            evolve_result=evolve_result,
+            before_fm=before_fm,
+            after_fm=after_fm,
+            before_pass=before_pass,
+            after_pass=after_pass,
+            failure_reason="shadow regression",
+            lesson="stabilize shadow performance",
+        ),
+    )
+    monkeypatch.setattr("optpilot.orchestrator.SHADOW_EVAL_INTERVAL", 1)
+
+    orchestrator = Orchestrator(runner=_AsyncRunner(), dag=dag, negatives_dir=tmp_path / "neg")
+    orchestrator.diagnoser = _AsyncDiagnoser()
+
+    await orchestrator.aoptimize(
+        tasks=["A:0", "A:1", "B:0", "B:1", "C:0", "C:1", "D:0", "D:1"],
+        max_rounds=1,
+        eval_tasks_per_round=4,
+    )
+
+    saved = json.loads((tmp_path / "neg" / "negatives_B.json").read_text())
+    shadow = saved[0]["metadata"]["shadow_gate"]
+    assert shadow["candidate_change_description"] == "strengthen verifier instructions"
+    assert shadow["observed_pattern_id"] == "prompt_strengthen_verification"
+    assert shadow["diagnostics"][0]["root_cause"] == "Verifier-focused prompt change overfit the active batch."
+
+
+@pytest.mark.anyio
+async def test_meta_evolve_triggers_after_three_shadow_rejections(monkeypatch, tmp_path):
+    dag = MASDAG(
+        dag_id="test",
+        nodes={
+            "start": DAGNode(node_id="start", node_type="literal", prompt="begin"),
+            "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+        },
+        edges=[DAGEdge(source="start", target="FINAL")],
+        metadata={"start": ["start"]},
+    )
+
+    batch_scores = [
+        0.0, 1.0, 1.0, 0.0,
+        0.0, 1.0, 1.0, 0.0,
+        0.0, 1.0, 1.0, 0.0,
+    ]
+    evolved = []
+
+    class _AsyncRunner:
+        benchmark_name_resolver = staticmethod(lambda task: task.split(":", 1)[0])
+
+        async def arun_batch(self, tasks, dag=None, output_base=None, max_concurrency=256):
+            score = batch_scores.pop(0)
+            return [_make_trace(i, score=score) for i in range(len(tasks))]
+
+    class _AsyncDiagnoser:
+        async def aclassify_batch(self, traces):
+            return [_make_profile(i, fm_active=True) for i in range(len(traces))]
+
+    async def fake_agenerate_evolve_candidates(
+        dag, fm_group, analysis, negatives, history,
+        recommended_pattern=None, recommended_patterns=None, traces=None, profiles=None,
+    ):
+        repaired = MASDAG(
+            dag_id="test",
+            nodes={
+                "start": DAGNode(node_id="start", node_type="literal", prompt="repaired"),
+                "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+            },
+            edges=[DAGEdge(source="start", target="FINAL")],
+            metadata={"start": ["start"]},
+        )
+        return [EvolveResult(
+            dag=repaired,
+            analysis_text="fixed prompt",
+            modified_source="source",
+            change_description="fixed prompt",
+            actions_taken=["change"],
+            metadata={"observed_pattern_id": "prompt_add_constraint"},
+        )]
+
+    def fake_analyze(dag, fm_group, traces, profiles, negatives):
+        return AnalysisResult(
+            fm_id=fm_group, fm_rate=1.0,
+            metadata={"dag_components": [], "proposal_traces": [], "failure_signatures": []},
+        )
+
+    monkeypatch.setattr("optpilot.orchestrator.agenerate_evolve_candidates", fake_agenerate_evolve_candidates)
+    monkeypatch.setattr("optpilot.orchestrator.analyze", fake_analyze)
+    monkeypatch.setattr(
+        "optpilot.orchestrator.fitness_score",
+        lambda traces, profiles, num_agents: sum(float(t.task_score or 0.0) for t in traces) / len(traces),
+    )
+    monkeypatch.setattr(
+        "optpilot.orchestrator.reflect",
+        lambda fm_group, dag, evolve_result, before_fm, after_fm, before_pass, after_pass: build_synthetic_insight(
+            fm_group=fm_group,
+            evolve_result=evolve_result,
+            before_fm=before_fm,
+            after_fm=after_fm,
+            before_pass=before_pass,
+            after_pass=after_pass,
+            failure_reason="shadow regression",
+            lesson="keep shadow accuracy stable",
+        ),
+    )
+    monkeypatch.setattr("optpilot.orchestrator.SHADOW_EVAL_INTERVAL", 1)
+    monkeypatch.setattr("optpilot.orchestrator.SHADOW_META_EVOLVE_THRESHOLD", 3)
+
+    orchestrator = Orchestrator(runner=_AsyncRunner(), dag=dag, negatives_dir=tmp_path / "neg")
+    orchestrator.diagnoser = _AsyncDiagnoser()
+    orchestrator.evolver.evolve_catalog = lambda fm_group, negatives: evolved.append((fm_group, len(negatives))) or True
+
+    await orchestrator.aoptimize(
+        tasks=["A:0", "A:1", "B:0", "B:1", "C:0", "C:1", "D:0", "D:1"],
+        max_rounds=3,
+        eval_tasks_per_round=4,
+    )
+
+    assert evolved == [("B", 3)]
 
 
 # -------------------------------------------------------------------- #

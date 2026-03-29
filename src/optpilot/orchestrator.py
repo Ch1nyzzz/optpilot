@@ -6,11 +6,20 @@ Each round: run → diagnose → Jacobian recommend → evolve → evaluate → 
 from __future__ import annotations
 
 import json
+import random
 from collections import Counter
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 from optpilot.config import LIBRARY_DIR
+from optpilot.config import (
+    JACOBIAN_TOP_K_PATTERNS,
+    ONLINE_EVAL_RANDOM_SEED,
+    SHADOW_EVAL_INTERVAL,
+    SHADOW_META_EVOLVE_THRESHOLD,
+    SKILL_EVOLVE_NUM_CANDIDATES,
+)
 from optpilot.dag.core import MASDAG
 from optpilot.data.fm_taxonomy_6group import GROUP_IDS, GROUP_NAMES
 from optpilot.models import FMLabel, FMLocalization, FMProfile, MASTrace, SkillBudget, SkillResult
@@ -20,7 +29,7 @@ from optpilot.skills.evolution import CatalogEvolver
 from optpilot.skills.jacobian import RepairJacobian, RepairOutcome
 from optpilot.skills.negatives import NegativesStore
 from optpilot.skills.repair_loop import (
-    aevolve,
+    agenerate_evolve_candidates,
     analyze,
     build_synthetic_insight,
     fm_rate,
@@ -43,10 +52,11 @@ def rank_fm_groups(
     target_fm: str | None = None,
     min_support: int = 2,
 ) -> list[tuple[str, int]]:
-    """Rank FM groups by frequency (descending). Returns [(fm_id, count), ...]."""
+    """Rank FM groups by primary failure frequency (descending)."""
     fm_counts: Counter[str] = Counter()
     for p in profiles:
-        for fm_id in p.active_fm_ids():
+        fm_id = p.primary_failure_id()
+        if fm_id:
             fm_counts[fm_id] += 1
 
     if target_fm:
@@ -87,6 +97,68 @@ def fitness_score(
     return sum(scores) / len(scores)
 
 
+def _resolve_task_benchmark_name(runner: MASRunner, task: str) -> str:
+    resolver = getattr(runner, "benchmark_name_resolver", None)
+    if callable(resolver):
+        try:
+            return str(resolver(task))
+        except Exception:
+            pass
+
+    fallback = getattr(runner, "_resolve_benchmark_name", None)
+    if callable(fallback):
+        try:
+            return str(fallback(task))
+        except Exception:
+            pass
+
+    return str(getattr(runner, "benchmark_name", "default"))
+
+
+def _sample_balanced_tasks(
+    runner: MASRunner,
+    tasks: list[str],
+    sample_size: int | None,
+    *,
+    seed: int,
+    exclude: set[str] | None = None,
+) -> list[str]:
+    if sample_size is None or sample_size >= len(tasks):
+        return list(tasks)
+
+    exclude = exclude or set()
+    available = [task for task in tasks if task not in exclude]
+    if sample_size >= len(available):
+        return list(available)
+
+    groups: dict[str, list[str]] = defaultdict(list)
+    for task in available:
+        groups[_resolve_task_benchmark_name(runner, task)].append(task)
+
+    rng = random.Random(seed)
+    group_names = list(groups)
+    rng.shuffle(group_names)
+    for bucket in groups.values():
+        rng.shuffle(bucket)
+
+    selected: list[str] = []
+    while len(selected) < sample_size:
+        progressed = False
+        for name in group_names:
+            bucket = groups[name]
+            if not bucket:
+                continue
+            selected.append(bucket.pop())
+            progressed = True
+            if len(selected) >= sample_size:
+                break
+        if not progressed:
+            break
+        rng.shuffle(group_names)
+
+    return selected
+
+
 def _save_dag_if_possible(dag: object, path: str | Path) -> str:
     path_obj = Path(path)
     if hasattr(dag, "save"):
@@ -113,6 +185,7 @@ def _profile_to_dict(profile: FMProfile) -> dict[str, object]:
     return {
         "trace_id": profile.trace_id,
         "active_fm_ids": profile.active_fm_ids(),
+        "primary_fm_id": profile.primary_failure_id(),
         "labels": {
             fm_id: {
                 "fm_name": label.fm_name,
@@ -122,6 +195,17 @@ def _profile_to_dict(profile: FMProfile) -> dict[str, object]:
             }
             for fm_id, label in profile.labels.items()
         },
+        "primary_localization": (
+            {
+                "agent": profile.primary_localization.agent,
+                "step": profile.primary_localization.step,
+                "context": profile.primary_localization.context,
+                "root_cause": profile.primary_localization.root_cause,
+                "dag_component": profile.primary_localization.dag_component,
+            }
+            if profile.primary_localization is not None
+            else None
+        ),
         "localization": {
             fm_id: {
                 "agent": loc.agent,
@@ -136,7 +220,10 @@ def _profile_to_dict(profile: FMProfile) -> dict[str, object]:
 
 
 def _profile_from_dict(data: dict[str, object]) -> FMProfile:
-    profile = FMProfile(trace_id=int(data["trace_id"]))
+    profile = FMProfile(
+        trace_id=int(data["trace_id"]),
+        primary_fm_id=str(data.get("primary_fm_id", "")),
+    )
 
     labels = data.get("labels", {})
     if isinstance(labels, dict):
@@ -163,6 +250,18 @@ def _profile_from_dict(data: dict[str, object]) -> FMProfile:
                 root_cause=str(raw.get("root_cause", "")),
                 dag_component=str(raw.get("dag_component", "other")),
             )
+
+    primary_localization = data.get("primary_localization")
+    if isinstance(primary_localization, dict):
+        profile.primary_localization = FMLocalization(
+            agent=str(primary_localization.get("agent", "")),
+            step=str(primary_localization.get("step", "")),
+            context=str(primary_localization.get("context", "")),
+            root_cause=str(primary_localization.get("root_cause", "")),
+            dag_component=str(primary_localization.get("dag_component", "other")),
+        )
+    elif profile.primary_fm_id and profile.primary_fm_id in profile.localization:
+        profile.primary_localization = profile.localization[profile.primary_fm_id]
 
     return profile
 
@@ -215,21 +314,24 @@ class Orchestrator:
         """Single-loop optimization: diagnose → recommend → evolve → evaluate.
 
         Each round targets the most severe FM group, applies one Jacobian-
-        recommended repair pattern, evaluates the candidate once on a fixed
-        online eval set, and updates the matrix.
-
-        If *eval_tasks_per_round* is set, use the same fixed prefix subset for
-        every round (aligned with the OpenEvolve baseline evaluator).
+        recommended repair pattern, evaluates the candidate on a balanced
+        active online minibatch, and periodically checks a shadow minibatch
+        before adoption.
         """
         current_dag = self.dag
         budget = budget or SkillBudget()
 
         eval_label = (
-            f"{eval_tasks_per_round} sampled per round"
+            f"{eval_tasks_per_round} balanced active samples per round"
             if eval_tasks_per_round else "all"
         )
         print("=== OptPilot Jacobian-Driven Optimization ===")
         print(f"Tasks: {len(tasks)} (eval: {eval_label}), Max rounds: {max_rounds}")
+        if eval_tasks_per_round and SHADOW_EVAL_INTERVAL > 0:
+            print(
+                "Shadow gate: "
+                f"{eval_tasks_per_round} balanced samples every {SHADOW_EVAL_INTERVAL} round(s)"
+            )
         print()
 
         results: list[dict] = []
@@ -238,33 +340,6 @@ class Orchestrator:
             initial_path = _save_dag_if_possible(current_dag, Path(dag_output_base) / "initial.yaml")
             if initial_path:
                 dag_versions.append({"stage": "initial", "path": initial_path})
-
-        # Fixed online evaluation set, matching the OpenEvolve-style protocol.
-        if eval_tasks_per_round and eval_tasks_per_round < len(tasks):
-            eval_tasks = tasks[:eval_tasks_per_round]
-        else:
-            eval_tasks = tasks
-
-        print(f"Initial incumbent evaluation on {len(eval_tasks)} task(s)...")
-        incumbent_trace_dir = (
-            Path(trace_output_base) / "round_0"
-            if trace_output_base else None
-        )
-        incumbent_traces = await self.runner.arun_batch(
-            eval_tasks,
-            dag=current_dag,
-            output_base=incumbent_trace_dir,
-            max_concurrency=concurrency,
-        )
-        incumbent_profiles = await self.diagnoser.aclassify_batch(incumbent_traces)
-        incumbent_score = fitness_score(
-            incumbent_traces,
-            incumbent_profiles,
-            len(current_dag.agent_nodes),
-        )
-        budget.used_batch_runs += 1
-        print(f"  Incumbent fitness: {incumbent_score:.4f}")
-        print()
 
         for round_i in range(max_rounds):
             print(f"=== Round {round_i + 1}/{max_rounds} ===")
@@ -277,6 +352,35 @@ class Orchestrator:
                 Path(dag_output_base) / f"round_{round_i + 1}"
                 if dag_output_base else None
             )
+
+            active_tasks = _sample_balanced_tasks(
+                self.runner,
+                tasks,
+                eval_tasks_per_round,
+                seed=ONLINE_EVAL_RANDOM_SEED + round_i,
+            )
+            active_counts = Counter(
+                _resolve_task_benchmark_name(self.runner, task) for task in active_tasks
+            )
+            print(
+                f"  Active batch ({len(active_tasks)}): "
+                + ", ".join(f"{bench}={count}" for bench, count in sorted(active_counts.items()))
+            )
+
+            incumbent_traces = await self.runner.arun_batch(
+                active_tasks,
+                dag=current_dag,
+                output_base=None,
+                max_concurrency=concurrency,
+            )
+            incumbent_profiles = await self.diagnoser.aclassify_batch(incumbent_traces)
+            incumbent_score = fitness_score(
+                incumbent_traces,
+                incumbent_profiles,
+                len(current_dag.agent_nodes),
+            )
+            budget.used_batch_runs += 1
+            print(f"  Incumbent active fitness: {incumbent_score:.4f}")
 
             # 1. Extract dominant failure from the cached incumbent eval.
             traces = incumbent_traces
@@ -298,95 +402,215 @@ class Orchestrator:
             )
 
             # 2. Jacobian recommend
-            recommended = self.jacobian.recommend(dom_sig, top_k=1)
-            pattern = recommended[0][0] if recommended else None
-            pattern_label = pattern.pattern_id if pattern else "none"
-            if pattern:
-                print(f"  Jacobian recommendation: {pattern.name} ({pattern.pattern_id})")
+            if SKILL_EVOLVE_NUM_CANDIDATES <= 1:
+                top_k_patterns = 1
+            else:
+                top_k_patterns = max(
+                    0, min(JACOBIAN_TOP_K_PATTERNS, SKILL_EVOLVE_NUM_CANDIDATES - 1)
+                )
+            recommended = self.jacobian.recommend(dom_sig, top_k=top_k_patterns)
+            recommended_patterns = [pattern for pattern, _ in recommended]
+            exploratory_slots = (
+                0
+                if SKILL_EVOLVE_NUM_CANDIDATES <= 1
+                else max(0, SKILL_EVOLVE_NUM_CANDIDATES - len(recommended_patterns))
+            )
+            candidate_pattern_plan = recommended_patterns + [None] * exploratory_slots
+            pattern = recommended_patterns[0] if recommended_patterns else None
+            pattern_label = ",".join(
+                [
+                    *(p.pattern_id for p in recommended_patterns),
+                    *(["explore"] * exploratory_slots),
+                ]
+            ) or "none"
+            if recommended_patterns:
+                print(
+                    "  Jacobian recommendations: "
+                    + ", ".join(f"{p.name} ({p.pattern_id})" for p in recommended_patterns)
+                )
+            if exploratory_slots:
+                print(f"  Exploratory candidates: {exploratory_slots}")
 
             # Load negatives for this FM group
             negatives = self.negatives_store.load(top_fm)
 
             # 3. Analyze + Evolve
-            print(f"  [1/3] Analyzing + evolving (pattern={pattern_label})...")
+            print(f"  [1/3] Analyzing + generating candidates (pattern={pattern_label})...")
             analysis = analyze(current_dag, top_fm, traces, profiles, negatives)
             budget.used_llm_calls += 1
 
-            evolve_result = await aevolve(
+            candidates = await agenerate_evolve_candidates(
                 current_dag, top_fm, analysis, negatives, [],
                 recommended_pattern=pattern,
+                recommended_patterns=candidate_pattern_plan,
                 traces=traces,
                 profiles=profiles,
             )
-            budget.used_llm_calls += 1
+            budget.used_llm_calls += max(1, len(candidates))
 
-            # Check for invalid evolve
-            invalid_reason = evolve_result.metadata.get("invalid_evolve_reason", "")
-            if invalid_reason:
-                print(f"  Invalid evolve: {invalid_reason[:120]}")
+            valid_candidates = [
+                candidate for candidate in candidates
+                if not candidate.metadata.get("invalid_evolve_reason", "")
+            ]
+            changed_candidates = [
+                candidate for candidate in valid_candidates
+                if has_material_change(current_dag, candidate.dag, candidate)
+            ]
+
+            if not changed_candidates:
+                failed_candidate = candidates[0] if candidates else None
+                invalid_reason = ""
+                if failed_candidate is not None:
+                    invalid_reason = str(failed_candidate.metadata.get("invalid_evolve_reason", ""))
+                reason = invalid_reason or "No concrete DAG change was applied."
+                print(f"  Candidate generation failed: {reason[:120]}")
                 insight = build_synthetic_insight(
                     fm_group=top_fm,
-                    evolve_result=evolve_result,
+                    evolve_result=failed_candidate,
                     before_fm=fm_rate(top_fm, profiles),
                     after_fm=fm_rate(top_fm, profiles),
                     before_pass=pass_rate(traces),
                     after_pass=pass_rate(traces),
-                    failure_reason=invalid_reason,
-                    lesson="Ensure evolve completes with a valid summary after edits.",
+                    failure_reason=reason,
+                    lesson="Generate at least one valid, materially different candidate before evaluation.",
                 )
                 self.negatives_store.extend(top_fm, [insight])
-                self.evolver.record_failure(top_fm)
-                results.append(self._round_entry(round_i, top_fm, False, evolve_result))
-                self._maybe_catalog_evolve(top_fm)
+                results.append(self._round_entry(round_i, top_fm, False, failed_candidate))
                 continue
 
-            # Check for material change
-            if not has_material_change(current_dag, evolve_result.dag, evolve_result):
-                print("  No material DAG change, skipping evaluation.")
-                insight = build_synthetic_insight(
-                    fm_group=top_fm,
-                    evolve_result=evolve_result,
-                    before_fm=fm_rate(top_fm, profiles),
-                    after_fm=fm_rate(top_fm, profiles),
-                    before_pass=pass_rate(traces),
-                    after_pass=pass_rate(traces),
-                    failure_reason="No concrete DAG change was applied.",
-                    lesson="Require at least one concrete code change before evaluating.",
-                )
-                self.negatives_store.extend(top_fm, [insight])
-                self.evolver.record_failure(top_fm)
-                results.append(self._round_entry(round_i, top_fm, False, evolve_result))
-                self._maybe_catalog_evolve(top_fm)
-                continue
-
-            # 4. Evaluate candidate once on the fixed online eval set.
-            print(f"  [2/3] Evaluating candidate DAG on {len(eval_tasks)} tasks...")
-            new_traces = await self.runner.arun_batch(
-                eval_tasks,
-                dag=evolve_result.dag,
-                output_base=round_trace_dir,
-                max_concurrency=concurrency,
+            # 4. Evaluate candidate pool on the active online minibatch.
+            print(
+                f"  [2/3] Evaluating {len(changed_candidates)} candidate DAG(s) "
+                f"on {len(active_tasks)} active task(s)..."
             )
-            new_profiles = await self.diagnoser.aclassify_batch(new_traces)
-            budget.used_batch_runs += 1
-
             before_fm_val = fm_rate(top_fm, profiles)
-            after_fm_val = fm_rate(top_fm, new_profiles)
             before_pass_val = pass_rate(traces)
-            after_pass_val = pass_rate(new_traces)
-
-            num_agents_after = len(evolve_result.dag.agent_nodes)
             before_fitness = incumbent_score
-            after_fitness = fitness_score(new_traces, new_profiles, num_agents_after)
-            improved = after_fitness > before_fitness
+            best_candidate = None
+            best_traces = None
+            best_profiles = None
+            best_after_fm = before_fm_val
+            best_after_pass = before_pass_val
+            best_after_fitness = before_fitness
 
-            print(f"  Fitness: {before_fitness:.4f} → {after_fitness:.4f}  "
-                  f"FM-{top_fm}: {before_fm_val:.2f} → {after_fm_val:.2f}  "
-                  f"pass: {before_pass_val:.3f} → {after_pass_val:.3f}")
+            for candidate_index, candidate in enumerate(changed_candidates, start=1):
+                candidate_trace_dir = (
+                    round_trace_dir / f"candidate_{candidate_index}"
+                    if round_trace_dir else None
+                )
+                candidate_traces = await self.runner.arun_batch(
+                    active_tasks,
+                    dag=candidate.dag,
+                    output_base=candidate_trace_dir,
+                    max_concurrency=concurrency,
+                )
+                candidate_profiles = await self.diagnoser.aclassify_batch(candidate_traces)
+                budget.used_batch_runs += 1
+
+                after_fm_val = fm_rate(top_fm, candidate_profiles)
+                after_pass_val = pass_rate(candidate_traces)
+                after_fitness = fitness_score(
+                    candidate_traces,
+                    candidate_profiles,
+                    len(candidate.dag.agent_nodes),
+                )
+                print(
+                    f"    Candidate {candidate_index}: fitness {after_fitness:.4f}, "
+                    f"FM-{top_fm} {before_fm_val:.2f}->{after_fm_val:.2f}, "
+                    f"pass {before_pass_val:.3f}->{after_pass_val:.3f}"
+                )
+
+                if (
+                    best_candidate is None
+                    or after_fitness > best_after_fitness
+                    or (
+                        after_fitness == best_after_fitness
+                        and after_fm_val < best_after_fm
+                    )
+                ):
+                    best_candidate = candidate
+                    best_traces = candidate_traces
+                    best_profiles = candidate_profiles
+                    best_after_fm = after_fm_val
+                    best_after_pass = after_pass_val
+                    best_after_fitness = after_fitness
+
+            assert best_candidate is not None
+            assert best_traces is not None
+            assert best_profiles is not None
+            improved = best_after_fitness > before_fitness
+
+            print(f"  Best candidate fitness: {before_fitness:.4f} → {best_after_fitness:.4f}  "
+                  f"FM-{top_fm}: {before_fm_val:.2f} → {best_after_fm:.2f}  "
+                  f"pass: {before_pass_val:.3f} → {best_after_pass:.3f}")
+
+            shadow_checked = False
+            shadow_passed = True
+            shadow_failure_metadata: dict[str, Any] | None = None
+            if (
+                improved
+                and eval_tasks_per_round
+                and SHADOW_EVAL_INTERVAL > 0
+                and (round_i + 1) % SHADOW_EVAL_INTERVAL == 0
+            ):
+                shadow_tasks = _sample_balanced_tasks(
+                    self.runner,
+                    tasks,
+                    eval_tasks_per_round,
+                    seed=ONLINE_EVAL_RANDOM_SEED + 10_000 + round_i,
+                    exclude=set(active_tasks),
+                )
+                if shadow_tasks:
+                    shadow_checked = True
+                else:
+                    print("  Shadow gate skipped: no held-out tasks available beyond active batch.")
+                if shadow_checked:
+                    shadow_counts = Counter(
+                        _resolve_task_benchmark_name(self.runner, task) for task in shadow_tasks
+                    )
+                    print(
+                        "  Shadow gate: "
+                        + ", ".join(f"{bench}={count}" for bench, count in sorted(shadow_counts.items()))
+                    )
+
+                    incumbent_shadow_traces = await self.runner.arun_batch(
+                        shadow_tasks,
+                        dag=current_dag,
+                        output_base=None,
+                        max_concurrency=concurrency,
+                    )
+                    incumbent_shadow_accuracy = pass_rate(incumbent_shadow_traces)
+
+                    candidate_shadow_traces = await self.runner.arun_batch(
+                        shadow_tasks,
+                        dag=best_candidate.dag,
+                        output_base=round_trace_dir / "shadow_candidate" if round_trace_dir else None,
+                        max_concurrency=concurrency,
+                    )
+                    budget.used_batch_runs += 2
+                    candidate_shadow_accuracy = pass_rate(candidate_shadow_traces)
+
+                    shadow_passed = candidate_shadow_accuracy >= incumbent_shadow_accuracy
+                    print(
+                        "  Shadow accuracy: "
+                        f"{incumbent_shadow_accuracy:.4f} → {candidate_shadow_accuracy:.4f}"
+                    )
+                    if not shadow_passed:
+                        improved = False
+                        print("  Shadow gate rejected candidate due to accuracy regression.")
+                        shadow_failure_metadata = await self._collect_shadow_rejection_metadata(
+                            fm_group=top_fm,
+                            shadow_tasks=shadow_tasks,
+                            incumbent_shadow_traces=incumbent_shadow_traces,
+                            candidate_shadow_traces=candidate_shadow_traces,
+                            candidate=best_candidate,
+                            incumbent_accuracy=incumbent_shadow_accuracy,
+                            candidate_accuracy=candidate_shadow_accuracy,
+                        )
 
             # 6. Update Jacobian
             if pattern:
-                observed = str(evolve_result.metadata.get("observed_pattern_id", ""))
+                observed = str(best_candidate.metadata.get("observed_pattern_id", ""))
                 outcome = RepairOutcome(
                     fm_group=dom_sig.fm_group,
                     dag_component=dom_sig.dag_component,
@@ -394,18 +618,15 @@ class Orchestrator:
                     assigned_pattern_id=pattern.pattern_id,
                     observed_pattern_id=observed,
                     success=improved,
-                    fm_delta=after_fm_val - before_fm_val,
-                    pass_delta=after_pass_val - before_pass_val,
+                    fm_delta=best_after_fm - before_fm_val,
+                    pass_delta=best_after_pass - before_pass_val,
                 )
                 self.jacobian.update(outcome)
 
             # 7. Adopt or reflect
             if improved:
-                current_dag = evolve_result.dag
+                current_dag = best_candidate.dag
                 self.dag = current_dag
-                incumbent_traces = new_traces
-                incumbent_profiles = new_profiles
-                incumbent_score = after_fitness
                 self.evolver.reset_failures(top_fm)
                 print(f"  [3/3] IMPROVED — adopting new DAG.")
 
@@ -422,27 +643,41 @@ class Orchestrator:
                         })
 
                 results.append(self._round_entry(
-                    round_i, top_fm, True, evolve_result,
-                    final_fm_rate=after_fm_val, final_pass_rate=after_pass_val,
-                        final_fitness=after_fitness,
+                    round_i, top_fm, True, best_candidate,
+                    final_fm_rate=best_after_fm, final_pass_rate=best_after_pass,
+                    final_fitness=best_after_fitness,
                 ))
             else:
                 print(f"  [3/3] No improvement, reflecting...")
                 insight = reflect(
-                    top_fm, current_dag, evolve_result,
-                    before_fm_val, after_fm_val, before_pass_val, after_pass_val,
+                    top_fm, current_dag, best_candidate,
+                    before_fm_val, best_after_fm, before_pass_val, best_after_pass,
                 )
+                if shadow_checked and not shadow_passed:
+                    insight.failure_reason = (
+                        f"{insight.failure_reason} Shadow eval regressed at round {round_i + 1}."
+                    ).strip()
+                    insight.lesson = (
+                        "Preserve gains on the active minibatch without regressing on a fresh "
+                        "balanced shadow batch."
+                    )
+                    if shadow_failure_metadata:
+                        insight.metadata.update(shadow_failure_metadata)
                 self.negatives_store.extend(top_fm, [insight])
-                self.evolver.record_failure(top_fm)
+                if shadow_checked and not shadow_passed:
+                    self.evolver.record_failure(top_fm)
                 print(f"    Lesson: {insight.lesson[:120]}")
 
                 results.append(self._round_entry(
-                    round_i, top_fm, False, evolve_result,
-                    final_fm_rate=after_fm_val, final_pass_rate=after_pass_val,
-                    final_fitness=after_fitness,
+                    round_i, top_fm, False, best_candidate,
+                    final_fm_rate=best_after_fm, final_pass_rate=best_after_pass,
+                    final_fitness=best_after_fitness,
                 ))
 
-                self._maybe_catalog_evolve(top_fm)
+                self._maybe_catalog_evolve(
+                    top_fm,
+                    shadow_failure=(shadow_checked and not shadow_passed),
+                )
 
             print()
 
@@ -550,76 +785,137 @@ class Orchestrator:
             fm_group=top_fm, dag_component="other",
         )
 
-        recommended = self.jacobian.recommend(dom_sig, top_k=1)
-        pattern = recommended[0][0] if recommended else None
-        if pattern:
-            print(f"  Jacobian recommendation: {pattern.name}")
+        if SKILL_EVOLVE_NUM_CANDIDATES <= 1:
+            top_k_patterns = 1
+        else:
+            top_k_patterns = max(
+                0, min(JACOBIAN_TOP_K_PATTERNS, SKILL_EVOLVE_NUM_CANDIDATES - 1)
+            )
+        recommended = self.jacobian.recommend(dom_sig, top_k=top_k_patterns)
+        recommended_patterns = [pattern for pattern, _ in recommended]
+        exploratory_slots = (
+            0
+            if SKILL_EVOLVE_NUM_CANDIDATES <= 1
+            else max(0, SKILL_EVOLVE_NUM_CANDIDATES - len(recommended_patterns))
+        )
+        candidate_pattern_plan = recommended_patterns + [None] * exploratory_slots
+        pattern = recommended_patterns[0] if recommended_patterns else None
+        if recommended_patterns:
+            print(
+                "  Jacobian recommendations: "
+                + ", ".join(pattern.name for pattern in recommended_patterns)
+            )
+        if exploratory_slots:
+            print(f"  Exploratory candidates: {exploratory_slots}")
 
         negatives = self.negatives_store.load(top_fm)
 
-        print("  Analyzing + evolving...")
+        print("  Analyzing + generating candidates...")
         analysis = analyze(current_dag, top_fm, traces, profiles, negatives)
-        evolve_result = await aevolve(
+        candidates = await agenerate_evolve_candidates(
             current_dag, top_fm, analysis, negatives, [],
             recommended_pattern=pattern,
+            recommended_patterns=candidate_pattern_plan,
             traces=traces,
             profiles=profiles,
         )
+        valid_candidates = [
+            candidate for candidate in candidates
+            if not candidate.metadata.get("invalid_evolve_reason", "")
+        ]
+        changed_candidates = [
+            candidate for candidate in valid_candidates
+            if has_material_change(current_dag, candidate.dag, candidate)
+        ]
 
-        invalid_reason = evolve_result.metadata.get("invalid_evolve_reason", "")
-        if invalid_reason or not has_material_change(current_dag, evolve_result.dag, evolve_result):
+        if not changed_candidates:
+            failed_candidate = candidates[0] if candidates else None
+            invalid_reason = ""
+            if failed_candidate is not None:
+                invalid_reason = str(failed_candidate.metadata.get("invalid_evolve_reason", ""))
             reason = invalid_reason or "No material DAG change."
             print(f"  Failed: {reason[:120]}")
             insight = build_synthetic_insight(
-                fm_group=top_fm, evolve_result=evolve_result,
+                fm_group=top_fm, evolve_result=failed_candidate,
                 before_fm=fm_rate(top_fm, profiles), after_fm=fm_rate(top_fm, profiles),
                 before_pass=pass_rate(traces), after_pass=pass_rate(traces),
                 failure_reason=reason, lesson="Ensure concrete repairs are applied.",
             )
             self.negatives_store.extend(top_fm, [insight])
-            self.evolver.record_failure(top_fm)
-            results.append(self._round_entry(0, top_fm, False, evolve_result))
+            results.append(self._round_entry(0, top_fm, False, failed_candidate))
         else:
-            print("  Evaluating repaired DAG...")
-            new_traces = await self.runner.arun_batch(
-                tasks, dag=evolve_result.dag, max_concurrency=concurrency,
-            )
-            new_profiles = await self.diagnoser.aclassify_batch(new_traces)
-
             before_fm_val = fm_rate(top_fm, profiles)
-            after_fm_val = fm_rate(top_fm, new_profiles)
             before_pass_val = pass_rate(traces)
-            after_pass_val = pass_rate(new_traces)
-
             num_agents_before = len(current_dag.agent_nodes)
-            num_agents_after = len(evolve_result.dag.agent_nodes)
             before_fitness = fitness_score(traces, profiles, num_agents_before)
-            after_fitness = fitness_score(new_traces, new_profiles, num_agents_after)
-            improved = after_fitness > before_fitness
+            best_candidate = None
+            best_traces = None
+            best_profiles = None
+            best_after_fm = before_fm_val
+            best_after_pass = before_pass_val
+            best_after_fitness = before_fitness
 
-            print(f"  Fitness: {before_fitness:.4f} → {after_fitness:.4f}  "
-                  f"FM-{top_fm}: {before_fm_val:.2f} → {after_fm_val:.2f}  "
-                  f"pass: {before_pass_val:.3f} → {after_pass_val:.3f}")
+            print(f"  Evaluating {len(changed_candidates)} repaired DAG candidate(s)...")
+            for candidate_index, candidate in enumerate(changed_candidates, start=1):
+                candidate_traces = await self.runner.arun_batch(
+                    tasks, dag=candidate.dag, max_concurrency=concurrency,
+                )
+                candidate_profiles = await self.diagnoser.aclassify_batch(candidate_traces)
+                after_fm_val = fm_rate(top_fm, candidate_profiles)
+                after_pass_val = pass_rate(candidate_traces)
+                after_fitness = fitness_score(
+                    candidate_traces,
+                    candidate_profiles,
+                    len(candidate.dag.agent_nodes),
+                )
+                print(
+                    f"    Candidate {candidate_index}: fitness {after_fitness:.4f}, "
+                    f"FM-{top_fm} {before_fm_val:.2f}->{after_fm_val:.2f}, "
+                    f"pass {before_pass_val:.3f}->{after_pass_val:.3f}"
+                )
+                if (
+                    best_candidate is None
+                    or after_fitness > best_after_fitness
+                    or (
+                        after_fitness == best_after_fitness
+                        and after_fm_val < best_after_fm
+                    )
+                ):
+                    best_candidate = candidate
+                    best_traces = candidate_traces
+                    best_profiles = candidate_profiles
+                    best_after_fm = after_fm_val
+                    best_after_pass = after_pass_val
+                    best_after_fitness = after_fitness
+
+            assert best_candidate is not None
+            assert best_traces is not None
+            assert best_profiles is not None
+            improved = best_after_fitness > before_fitness
+
+            print(f"  Best candidate fitness: {before_fitness:.4f} → {best_after_fitness:.4f}  "
+                  f"FM-{top_fm}: {before_fm_val:.2f} → {best_after_fm:.2f}  "
+                  f"pass: {before_pass_val:.3f} → {best_after_pass:.3f}")
 
             if pattern:
-                observed = str(evolve_result.metadata.get("observed_pattern_id", ""))
+                observed = str(best_candidate.metadata.get("observed_pattern_id", ""))
                 self.jacobian.update(RepairOutcome(
                     fm_group=dom_sig.fm_group, dag_component=dom_sig.dag_component,
                     agent=dom_sig.agent, assigned_pattern_id=pattern.pattern_id,
                     observed_pattern_id=observed, success=improved,
-                    fm_delta=after_fm_val - before_fm_val,
-                    pass_delta=after_pass_val - before_pass_val,
+                    fm_delta=best_after_fm - before_fm_val,
+                    pass_delta=best_after_pass - before_pass_val,
                 ))
 
             if improved:
-                current_dag = evolve_result.dag
+                current_dag = best_candidate.dag
                 self.dag = current_dag
                 self.evolver.reset_failures(top_fm)
                 print("  IMPROVED — adopting new DAG.")
                 results.append(self._round_entry(
-                    0, top_fm, True, evolve_result,
-                    final_fm_rate=after_fm_val, final_pass_rate=after_pass_val,
-                    final_fitness=after_fitness,
+                    0, top_fm, True, best_candidate,
+                    final_fm_rate=best_after_fm, final_pass_rate=best_after_pass,
+                    final_fitness=best_after_fitness,
                 ))
                 if dag_output_base:
                     p = _save_dag_if_possible(current_dag, Path(dag_output_base) / "improved.yaml")
@@ -627,16 +923,15 @@ class Orchestrator:
                         dag_versions.append({"stage": "improved", "path": p})
             else:
                 insight = reflect(
-                    top_fm, current_dag, evolve_result,
-                    before_fm_val, after_fm_val, before_pass_val, after_pass_val,
+                    top_fm, current_dag, best_candidate,
+                    before_fm_val, best_after_fm, before_pass_val, best_after_pass,
                 )
                 self.negatives_store.extend(top_fm, [insight])
-                self.evolver.record_failure(top_fm)
                 print(f"  No improvement. Lesson: {insight.lesson[:120]}")
                 results.append(self._round_entry(
-                    0, top_fm, False, evolve_result,
-                    final_fm_rate=after_fm_val, final_pass_rate=after_pass_val,
-                    final_fitness=after_fitness,
+                    0, top_fm, False, best_candidate,
+                    final_fm_rate=best_after_fm, final_pass_rate=best_after_pass,
+                    final_fitness=best_after_fitness,
                 ))
 
         if dag_output_base:
@@ -651,6 +946,75 @@ class Orchestrator:
     # ---------------------------------------------------------------- #
     #  Helpers                                                          #
     # ---------------------------------------------------------------- #
+
+    async def _collect_shadow_rejection_metadata(
+        self,
+        *,
+        fm_group: str,
+        shadow_tasks: list[str],
+        incumbent_shadow_traces: list[MASTrace],
+        candidate_shadow_traces: list[MASTrace],
+        candidate: Any,
+        incumbent_accuracy: float,
+        candidate_accuracy: float,
+        max_diagnostics: int = 5,
+    ) -> dict[str, Any]:
+        regressions: list[tuple[str, MASTrace, bool]] = []
+        candidate_failures: list[tuple[str, MASTrace, bool]] = []
+
+        for task, incumbent_trace, candidate_trace in zip(
+            shadow_tasks, incumbent_shadow_traces, candidate_shadow_traces
+        ):
+            incumbent_success = bool(getattr(incumbent_trace, "task_success", False))
+            candidate_success = bool(getattr(candidate_trace, "task_success", False))
+            if incumbent_success and not candidate_success:
+                regressions.append((task, candidate_trace, True))
+            elif not candidate_success:
+                candidate_failures.append((task, candidate_trace, False))
+
+        selected = regressions[:max_diagnostics]
+        if len(selected) < max_diagnostics:
+            selected.extend(candidate_failures[: max_diagnostics - len(selected)])
+
+        traces_to_diagnose = [trace for _, trace, _ in selected]
+        if traces_to_diagnose and hasattr(self.diagnoser, "adiagnose_batch"):
+            diagnosed_profiles = await self.diagnoser.adiagnose_batch(traces_to_diagnose)
+        else:
+            diagnosed_profiles = [FMProfile(trace_id=getattr(trace, "trace_id", i)) for i, trace in enumerate(traces_to_diagnose)]
+
+        diagnostics: list[dict[str, Any]] = []
+        for (task, trace, is_regression), profile in zip(selected, diagnosed_profiles):
+            loc = profile.primary_localization
+            diagnostics.append({
+                "task": task,
+                "task_key": str(getattr(trace, "task_key", "")),
+                "benchmark": str(getattr(trace, "benchmark_name", "")),
+                "trace_path": str(getattr(trace, "trace_path", "")),
+                "is_regression": is_regression,
+                "candidate_success": bool(getattr(trace, "task_success", False)),
+                "candidate_score": getattr(trace, "task_score", None),
+                "primary_fm_id": profile.primary_failure_id(),
+                "root_cause": loc.root_cause if loc else "",
+                "agent": loc.agent if loc else "",
+                "dag_component": loc.dag_component if loc else "",
+                "context": loc.context if loc else "",
+            })
+
+        return {
+            "shadow_gate": {
+                "fm_group": fm_group,
+                "incumbent_accuracy": incumbent_accuracy,
+                "candidate_accuracy": candidate_accuracy,
+                "num_regressions": len(regressions),
+                "num_candidate_failures": sum(
+                    1 for trace in candidate_shadow_traces if not bool(getattr(trace, "task_success", False))
+                ),
+                "candidate_change_description": str(getattr(candidate, "change_description", "")),
+                "candidate_actions": list(getattr(candidate, "actions_taken", []) or []),
+                "observed_pattern_id": str(getattr(candidate, "metadata", {}).get("observed_pattern_id", "")),
+                "diagnostics": diagnostics,
+            },
+        }
 
     def _round_entry(
         self,
@@ -675,9 +1039,11 @@ class Orchestrator:
         self.tracker.log(entry, step=round_i)
         return entry
 
-    def _maybe_catalog_evolve(self, fm_group: str) -> None:
-        """Trigger catalog meta-evolution if failure threshold reached."""
-        if self.evolver.should_evolve(fm_group):
+    def _maybe_catalog_evolve(self, fm_group: str, *, shadow_failure: bool = False) -> None:
+        """Trigger catalog meta-evolution after repeated shadow-gate rejections."""
+        if not shadow_failure:
+            return
+        if self.evolver.should_evolve(fm_group, threshold=SHADOW_META_EVOLVE_THRESHOLD):
             print(f"  Triggering catalog meta-evolution for Group-{fm_group}...")
             all_neg = self.negatives_store.load(fm_group)
             self.evolver.evolve_catalog(fm_group, all_neg)

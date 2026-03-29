@@ -178,6 +178,8 @@ def run(
     os.environ["OPENEVOLVE_TIMEOUT"] = str(timeout)
     os.environ["OPENEVOLVE_EVAL_TASKS"] = str(eval_tasks)
     os.environ["OPENEVOLVE_TOTAL_TASKS"] = str(total)
+    selected_eval_prompts = [example.prompt for example in train_examples[: min(eval_tasks, len(train_examples))]]
+    os.environ["OPENEVOLVE_EVAL_PROMPTS_JSON"] = json.dumps(selected_eval_prompts, ensure_ascii=False)
 
     # Ensure Together AI API key is visible to SkyDiscover
     # SkyDiscover's "together" provider reads: TOGETHER_API_KEY, TOGETHER_AI_API_KEY, together_ai_api

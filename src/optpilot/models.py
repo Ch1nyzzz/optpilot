@@ -58,12 +58,20 @@ class FMProfile:
     trace_id: int
     labels: dict[str, FMLabel] = field(default_factory=dict)
     localization: dict[str, FMLocalization] = field(default_factory=dict)  # fm_id -> loc
+    primary_fm_id: str = ""
+    primary_localization: FMLocalization | None = None
 
     def active_fms(self) -> list[FMLabel]:
         return [l for l in self.labels.values() if l.present]
 
     def active_fm_ids(self) -> list[str]:
         return [l.fm_id for l in self.active_fms()]
+
+    def primary_failure_id(self) -> str:
+        if self.primary_fm_id and self.primary_fm_id in self.active_fm_ids():
+            return self.primary_fm_id
+        active = self.active_fm_ids()
+        return active[0] if active else ""
 
 
 # === Repair Actions ===
@@ -167,6 +175,7 @@ class ReflectInsight:
     failure_reason: str
     lesson: str
     timestamp: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

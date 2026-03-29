@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from optpilot.config import DAG_DIR, RESULTS_DIR
+from optpilot.config import DAG_DIR, RESULTS_DIR, SHADOW_EVAL_INTERVAL
 from optpilot.dag.core import MASDAG
 from optpilot.data.benchmarks import load_online_benchmark_suite, OfficialBenchmarkSuite
 from optpilot.models import SkillBudget
@@ -182,7 +182,9 @@ async def run(
     print(f"  Test:        {len(test_examples)} tasks  {dict(test_suite.benchmark_counts())}")
     print(f"  Rounds:      {max_rounds}")
     if eval_tasks:
-        print(f"  Eval/round:  {eval_tasks} tasks (sampled)")
+        print(f"  Eval/round:  {eval_tasks} tasks (balanced sampled)")
+        if SHADOW_EVAL_INTERVAL > 0:
+            print(f"  Shadow gate: every {SHADOW_EVAL_INTERVAL} round(s)")
     if target_group:
         print(f"  Target FM:   Group-{target_group}")
     if reuse_diagnose_dir:
@@ -262,6 +264,7 @@ async def run(
         "n_test": n_test,
         "max_rounds": max_rounds,
         "eval_tasks_per_round": eval_tasks,
+        "shadow_eval_interval": SHADOW_EVAL_INTERVAL,
         "target_group": target_group,
         "concurrency": concurrency,
         "timeout_s": timeout,

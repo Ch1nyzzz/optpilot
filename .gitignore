@@ -25,3 +25,9 @@ chatdev_v2/
 
 # Environment
 .env
+
+# Generated experiment artifacts
+logs/
+results/
+library_store/skill_agent_traces/
+library_store/meta_evolve_traces/

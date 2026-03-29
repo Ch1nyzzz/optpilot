@@ -8,8 +8,11 @@ from optpilot.modules.diagnoser import Diagnoser
 
 @pytest.mark.anyio
 async def test_diagnoser_adiagnose_uses_async_localization(monkeypatch) -> None:
-    async def fake_aclassify(self, trace, model=None):
-        return {"A": False, "B": True, "C": False, "D": False, "E": False, "F": True}
+    async def fake_aclassify_raw(self, trace, model=None):
+        return {
+            "A": False, "B": True, "C": False, "D": False, "E": False, "F": True,
+            "primary_failure_group": "F",
+        }
 
     async def fake_alocalize_group(self, trace, gid, trace_content):
         return FMLocalization(
@@ -19,7 +22,7 @@ async def test_diagnoser_adiagnose_uses_async_localization(monkeypatch) -> None:
             root_cause=f"{gid}-cause",
         )
 
-    monkeypatch.setattr(Diagnoser, "_aclassify", fake_aclassify)
+    monkeypatch.setattr(Diagnoser, "_aclassify_raw", fake_aclassify_raw)
     monkeypatch.setattr(Diagnoser, "_alocalize_group", fake_alocalize_group)
 
     diagnoser = Diagnoser(max_workers=4)
@@ -33,20 +36,25 @@ async def test_diagnoser_adiagnose_uses_async_localization(monkeypatch) -> None:
 
     profile = await diagnoser.adiagnose(trace)
 
-    assert sorted(profile.localization) == ["B", "F"]
-    assert profile.localization["B"].agent == "assistant"
+    assert profile.primary_fm_id == "F"
+    assert sorted(profile.localization) == ["F"]
     assert profile.localization["F"].root_cause == "F-cause"
+    assert profile.primary_localization is not None
+    assert profile.primary_localization.root_cause == "F-cause"
 
 
 @pytest.mark.anyio
 async def test_diagnoser_aclassify_batch_skips_localization(monkeypatch) -> None:
-    async def fake_aclassify(self, trace, model=None):
-        return {"A": False, "B": True, "C": False, "D": False, "E": False, "F": False}
+    async def fake_aclassify_raw(self, trace, model=None):
+        return {
+            "A": False, "B": True, "C": False, "D": False, "E": False, "F": False,
+            "primary_failure_group": "B",
+        }
 
     async def fail_alocalize_group(self, trace, gid, trace_content):
         raise AssertionError("localization should not be called in classify-only mode")
 
-    monkeypatch.setattr(Diagnoser, "_aclassify", fake_aclassify)
+    monkeypatch.setattr(Diagnoser, "_aclassify_raw", fake_aclassify_raw)
     monkeypatch.setattr(Diagnoser, "_alocalize_group", fail_alocalize_group)
 
     diagnoser = Diagnoser(max_workers=4)
@@ -65,4 +73,5 @@ async def test_diagnoser_aclassify_batch_skips_localization(monkeypatch) -> None
 
     assert len(profiles) == 2
     assert all(profile.active_fm_ids() == ["B"] for profile in profiles)
+    assert all(profile.primary_fm_id == "B" for profile in profiles)
     assert all(profile.localization == {} for profile in profiles)

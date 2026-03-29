@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from optpilot.config import (
+    JUDGE_MODEL,
     LIBRARY_DIR,
     META_EVOLVE_FAILURE_THRESHOLD,
     META_EVOLVE_MAX_TOKENS,
@@ -55,25 +56,33 @@ divergence data (which patterns work, which get ignored by the repair LLM)
 - `meta_context.md` — index of repository paths and persistent experience
 - `failure_summary.md` — condensed summary of recent failed repair attempts
 - `failures.json` — structured failure records for this FM group
+- `diagnosis_bundle.md` — diagnosis-first summary of why recent shadow-gate \
+rejections failed to generalize
+- `diagnosis_bundle.json` — structured version of the same shadow rejection \
+diagnostics
 
 ## Workflow
-1. Read `cat jacobian_report.md` — this is your primary signal. It shows \
-which patterns actually work, which consistently fail, and where the repair \
-LLM diverges from recommendations (does something different than suggested).
-2. Read `cat catalog.json` and `cat failure_summary.md`.
-3. Use `bash` to inspect repository files referenced in `meta_context.md` \
+1. Read `cat diagnosis_bundle.md` first. Treat this as the primary signal for \
+why recent candidates did not succeed on shadow evaluation.
+2. Read `cat jacobian_report.md` to see which patterns actually work, which \
+consistently fail, and where the repair LLM diverges from recommendations.
+3. Read `cat catalog.json` and `cat failure_summary.md`.
+4. Use `bash` to inspect repository files referenced in `meta_context.md` \
 if you need to understand the repair semantics.
-4. Decide what to change. You have a spectrum of actions from conservative \
+5. Decide what to change. You have a spectrum of actions from conservative \
 to aggressive — choose based on how badly things are failing:
 
 ### Conservative (some patterns still work)
-   - **Refine** pattern descriptions that get ignored — the repair LLM may \
+   - **Refine descriptions** that get ignored — the repair LLM may \
 not follow them because the description is too vague or mismatched.
    - **Update target_components** if the Jacobian shows a pattern works for \
 different DAG components than originally specified.
+   - **Tighten or narrow** over-broad patterns whose wording encourages changes \
+that help the active batch but hurt shadow generalization.
 
 ### Moderate (most patterns underperform)
-   - **Disable** patterns with consistently low success rates (effective=false).
+   - **Disable / re-enable** patterns by setting `effective=false/true` based \
+on whether the diagnosis bundle shows they are causing or avoiding regressions.
    - **Promote** observed divergences: if the repair LLM repeatedly ignores \
 pattern A and does something else that works, add that "something else" as \
 a first-class pattern.
@@ -90,7 +99,7 @@ combining multiple atomic fixes into a single compound pattern, etc.
    - A creative new pattern that might work is more valuable than a refined \
 old pattern that has already proven ineffective.
 
-5. Summarize what you changed and why.
+6. Summarize what you changed and why.
 
 ## Rules
 - Each pattern must have a unique pattern_id (lowercase_with_underscores).
@@ -102,6 +111,12 @@ preserved across loop iterations" actually guide the repair.
 - target_components must be from: agent_prompt, edge_carry_data, \
 edge_condition, edge_missing, loop_config, node_config, other.
 - Do not remove all patterns — keep at least 3 effective patterns.
+- Base your decision on the diagnosed failure mechanisms. Do not only react to \
+aggregate score drops; identify why shadow examples regressed and modify the \
+catalog to avoid repeating those failure mechanisms.
+- Prefer editing existing patterns first: description, effective flag, and \
+target_components are the lowest-cost levers. Add brand-new patterns only \
+when the diagnosis bundle shows the current catalog lacks the right repair idea.
 - Focus on FM group {fm_group}."""
 
 _EVOLVE_USER_PROMPT = """\
@@ -113,9 +128,10 @@ The repair patterns for FM group {fm_group} have repeatedly failed \
 
 ## Your Task
 Read these files in order:
-1. `jacobian_report.md` — empirical success rates and divergence data.
-2. `catalog.json` — current patterns.
-3. `failure_summary.md` — what went wrong.
+1. `diagnosis_bundle.md` — why recent shadow-gate candidates failed.
+2. `jacobian_report.md` — empirical success rates and divergence data.
+3. `catalog.json` — current patterns.
+4. `failure_summary.md` — what went wrong over time.
 
 Then decide how aggressively to change the catalog:
 - If some patterns still have decent success rates, refine and promote.
@@ -123,7 +139,13 @@ Then decide how aggressively to change the catalog:
 new approaches** based on what the failure traces actually show. The current \
 catalog clearly isn't solving this failure mode — incremental refinement of \
 broken patterns won't help. Think from first principles about what repair \
-strategy could actually fix this class of MAS failure."""
+strategy could actually fix this class of MAS failure.
+
+When reading `diagnosis_bundle.md`, answer these questions before editing:
+- What specific failure mechanisms caused shadow regressions?
+- Which current patterns encourage or fail to prevent those mechanisms?
+- What new pattern wording, disabling decision, or new pattern would make the \
+repair LLM less likely to repeat them?"""
 
 
 # Tool schemas for catalog evolution
@@ -298,9 +320,75 @@ def _build_failure_summary(negatives: list[ReflectInsight], max_items: int = 20)
             f"- Pass rate: {neg.before_pass_rate:.3f} -> {neg.after_pass_rate:.3f}",
             f"- Reason: {neg.failure_reason}",
             f"- Lesson: {neg.lesson}",
+            (
+                "- Shadow diagnosis: "
+                + "; ".join(
+                    f"{item.get('primary_fm_id') or 'unknown'} via "
+                    f"{item.get('dag_component') or 'other'}: "
+                    f"{item.get('root_cause') or 'no root cause captured'}"
+                    for item in neg.metadata.get("shadow_gate", {}).get("diagnostics", [])[:3]
+                )
+                if neg.metadata.get("shadow_gate", {}).get("diagnostics")
+                else "- Shadow diagnosis: none"
+            ),
             "",
         ])
     return "\n".join(lines).rstrip()
+
+
+def _build_diagnosis_bundle(negatives: list[ReflectInsight], max_items: int = 10) -> tuple[str, str]:
+    bundle_items: list[dict[str, object]] = []
+    markdown_lines = [
+        "# Diagnosis Bundle",
+        "",
+        "Use this file to understand why recent candidates failed to generalize on shadow evaluation.",
+        "",
+    ]
+
+    for neg in negatives[-max_items:]:
+        shadow = neg.metadata.get("shadow_gate", {})
+        if not shadow:
+            continue
+        item = {
+            "round_index": neg.round_index,
+            "failure_reason": neg.failure_reason,
+            "lesson": neg.lesson,
+            "shadow_gate": shadow,
+        }
+        bundle_items.append(item)
+
+    if not bundle_items:
+        markdown_lines.append("No structured shadow rejection diagnostics recorded yet.")
+        return "\n".join(markdown_lines), json.dumps([], ensure_ascii=False, indent=2)
+
+    for idx, item in enumerate(bundle_items, 1):
+        shadow = item["shadow_gate"]
+        diagnostics = shadow.get("diagnostics", [])
+        markdown_lines.extend([
+            f"## Shadow Rejection {idx}",
+            f"- Round index: {item['round_index']}",
+            f"- Failure reason: {item['failure_reason']}",
+            f"- Lesson: {item['lesson']}",
+            f"- Accuracy: {shadow.get('incumbent_accuracy', 0.0):.3f} -> {shadow.get('candidate_accuracy', 0.0):.3f}",
+            f"- Candidate change: {shadow.get('candidate_change_description', '') or 'none recorded'}",
+            f"- Observed pattern: {shadow.get('observed_pattern_id', '') or 'unknown'}",
+            f"- Regressions: {shadow.get('num_regressions', 0)}",
+            "",
+        ])
+        if diagnostics:
+            markdown_lines.append("### Diagnosed Shadow Failures")
+            for diag in diagnostics[:5]:
+                markdown_lines.append(
+                    f"- [{diag.get('benchmark', 'unknown')}] "
+                    f"{diag.get('task_key', '')[:100]} | "
+                    f"primary={diag.get('primary_fm_id', '') or 'unknown'} | "
+                    f"component={diag.get('dag_component', '') or 'other'} | "
+                    f"agent={diag.get('agent', '') or 'unknown'} | "
+                    f"cause={diag.get('root_cause', '') or 'missing'}"
+                )
+            markdown_lines.append("")
+
+    return "\n".join(markdown_lines).rstrip(), json.dumps(bundle_items, ensure_ascii=False, indent=2)
 
 
 def _build_meta_context(fm_group: str) -> str:
@@ -418,6 +506,9 @@ class CatalogEvolver:
         ctx = _CatalogContext(self.catalog)
         ctx._write_file("meta_context.md", _build_meta_context(fm_group))
         ctx._write_file("failure_summary.md", _build_failure_summary(negatives))
+        diagnosis_bundle_md, diagnosis_bundle_json = _build_diagnosis_bundle(negatives)
+        ctx._write_file("diagnosis_bundle.md", diagnosis_bundle_md)
+        ctx._write_file("diagnosis_bundle.json", diagnosis_bundle_json)
         ctx._write_file(
             "failures.json",
             json.dumps([asdict(neg) for neg in negatives], ensure_ascii=False, indent=2),
@@ -437,6 +528,7 @@ class CatalogEvolver:
             ],
             tools=_CATALOG_TOOL_SCHEMAS,
             tool_executor=ctx.execute_tool,
+            model=JUDGE_MODEL,
             max_tokens=META_EVOLVE_MAX_TOKENS,
             max_turns=META_EVOLVE_MAX_TURNS,
         )

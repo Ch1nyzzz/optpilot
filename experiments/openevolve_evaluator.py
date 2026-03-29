@@ -44,6 +44,7 @@ _CONCURRENCY = int(os.environ.get("OPENEVOLVE_CONCURRENCY", "512"))
 _TIMEOUT = int(os.environ.get("OPENEVOLVE_TIMEOUT", "600"))
 _EVAL_TASKS = int(os.environ.get("OPENEVOLVE_EVAL_TASKS", "20"))
 _TOTAL_TASKS = int(os.environ.get("OPENEVOLVE_TOTAL_TASKS", "200"))
+_EVAL_PROMPTS_JSON = os.environ.get("OPENEVOLVE_EVAL_PROMPTS_JSON", "")
 
 # Lazy-initialized globals (expensive to rebuild every call)
 _suite: OfficialBenchmarkSuite | None = None
@@ -60,8 +61,20 @@ def _init_globals() -> None:
         return
 
     full_suite = load_online_benchmark_suite(_TOTAL_TASKS)
-    # Use the first _EVAL_TASKS examples as the per-iteration eval set
     eval_examples = full_suite.examples[:_EVAL_TASKS]
+    if _EVAL_PROMPTS_JSON:
+        try:
+            requested_prompts = json.loads(_EVAL_PROMPTS_JSON)
+        except json.JSONDecodeError:
+            requested_prompts = []
+        if isinstance(requested_prompts, list) and requested_prompts:
+            requested_set = {str(prompt) for prompt in requested_prompts}
+            eval_examples = [
+                example for example in full_suite.examples
+                if example.prompt in requested_set
+            ]
+            order = {str(prompt): i for i, prompt in enumerate(requested_prompts)}
+            eval_examples.sort(key=lambda example: order.get(example.prompt, len(order)))
     _suite = OfficialBenchmarkSuite(eval_examples)
     _eval_prompts = _suite.tasks()
 

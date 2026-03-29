@@ -55,14 +55,15 @@ def extract_failure_signatures(
 ) -> list[FailureSignature]:
     """Extract FailureSignatures from profiles for a given FM group.
 
-    The online recommender is FM-group keyed. Localization-derived metadata is
-    retained when available, but it does not change the row key.
+    The online recommender is FM-group keyed and uses one dominant failure per
+    task. Localization-derived metadata is retained when available, but it does
+    not change the row key.
     """
     signatures: list[FailureSignature] = []
     for profile in profiles:
-        if fm_group not in profile.active_fm_ids():
+        if profile.primary_failure_id() != fm_group:
             continue
-        loc = profile.localization.get(fm_group)
+        loc = profile.primary_localization or profile.localization.get(fm_group)
         if loc is None:
             signatures.append(FailureSignature(
                 fm_group=fm_group,

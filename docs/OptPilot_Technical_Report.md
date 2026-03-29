@@ -19,6 +19,10 @@
 
 现有研究（MAST、AgentFail）在失败模式的分类和诊断方面做出了重要贡献，但**缺乏从诊断到自动修复的闭环能力**。
 
+
+
+
+
 ### 1.2 核心论题
 
 **诊断驱动的定向修复（Diagnosis → Targeted Repair），而非盲目进化（Blind Evolution）。**

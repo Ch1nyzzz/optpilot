@@ -17,7 +17,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from optpilot.config import LIBRARY_DIR
+from optpilot.config import (
+    JACOBIAN_PATTERN_COOLDOWN_ROUNDS,
+    JACOBIAN_PATTERN_FAILURE_COOLDOWN_THRESHOLD,
+    LIBRARY_DIR,
+)
 from optpilot.skills.repair_patterns import (
     FailureSignature,
     PatternCatalog,
@@ -109,6 +113,8 @@ class RepairJacobian:
 
         # Full outcome log (assigned + observed)
         self.outcomes: list[RepairOutcome] = []
+        self.assigned_failure_streaks: dict[str, dict[str, int]] = {}
+        self.assigned_pattern_cooldowns: dict[str, dict[str, int]] = {}
 
         # Try to load persisted state
         self._load()
@@ -130,10 +136,16 @@ class RepairJacobian:
         """
         sig_key = sig.signature_key()
         entries = self.matrix.get(sig_key, {})
+        cooldowns = self.assigned_pattern_cooldowns.get(sig_key, {})
 
         scored: list[tuple[str, float]] = []
+        blocked_pattern_ids: set[str] = {
+            pattern_id for pattern_id, remaining in cooldowns.items() if remaining > 0
+        }
 
         for pattern_id, pattern in self.catalog.effective_items():
+            if pattern_id in blocked_pattern_ids:
+                continue
             entry = entries.get(pattern_id)
             if entry and entry.n_applied >= 1:
                 # Data-driven score: blend empirical success_rate with cold-start prior.
@@ -146,6 +158,27 @@ class RepairJacobian:
                 score = self._cold_start_score(sig, pattern)
 
             scored.append((pattern_id, score))
+
+        if not scored:
+            for pattern_id, pattern in self.catalog.effective_items():
+                entry = entries.get(pattern_id)
+                if entry and entry.n_applied >= 1:
+                    prior = self._cold_start_score(sig, pattern)
+                    alpha = entry.n_applied / (entry.n_applied + 2.0)
+                    score = alpha * entry.success_rate + (1 - alpha) * prior
+                else:
+                    score = self._cold_start_score(sig, pattern)
+                scored.append((pattern_id, score))
+
+        if blocked_pattern_ids:
+            next_cooldowns: dict[str, int] = {}
+            for pattern_id, remaining in cooldowns.items():
+                if remaining > 1:
+                    next_cooldowns[pattern_id] = remaining - 1
+            if next_cooldowns:
+                self.assigned_pattern_cooldowns[sig_key] = next_cooldowns
+            else:
+                self.assigned_pattern_cooldowns.pop(sig_key, None)
 
         # Sort by score descending
         scored.sort(key=lambda x: x[1], reverse=True)
@@ -234,7 +267,32 @@ class RepairJacobian:
                 override_success=False,
             )
 
+        self._update_assigned_pattern_state(sig_key, outcome)
         self.outcomes.append(outcome)
+
+    def _update_assigned_pattern_state(self, sig_key: str, outcome: RepairOutcome) -> None:
+        """Track assigned-pattern failure streaks and short cooldowns."""
+        assigned_pattern_id = outcome.assigned_pattern_id
+        if not assigned_pattern_id:
+            return
+
+        pattern_streaks = self.assigned_failure_streaks.setdefault(sig_key, {})
+        pattern_cooldowns = self.assigned_pattern_cooldowns.setdefault(sig_key, {})
+        followed_assigned_pattern = (
+            not outcome.observed_pattern_id or outcome.observed_pattern_id == assigned_pattern_id
+        )
+        assigned_effective_success = outcome.success and followed_assigned_pattern
+
+        if assigned_effective_success:
+            pattern_streaks[assigned_pattern_id] = 0
+            return
+
+        streak = pattern_streaks.get(assigned_pattern_id, 0) + 1
+        if streak >= JACOBIAN_PATTERN_FAILURE_COOLDOWN_THRESHOLD:
+            pattern_cooldowns[assigned_pattern_id] = max(JACOBIAN_PATTERN_COOLDOWN_ROUNDS, 1)
+            pattern_streaks[assigned_pattern_id] = 0
+        else:
+            pattern_streaks[assigned_pattern_id] = streak
 
     def _update_entry(
         self,
@@ -277,6 +335,19 @@ class RepairJacobian:
             encoding="utf-8",
         )
 
+        state_path = self.base_dir / "state.json"
+        state_path.write_text(
+            json.dumps(
+                {
+                    "assigned_failure_streaks": self.assigned_failure_streaks,
+                    "assigned_pattern_cooldowns": self.assigned_pattern_cooldowns,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
         # Append new outcomes to JSONL
         outcomes_path = self.base_dir / "outcomes.jsonl"
         with open(outcomes_path, "a", encoding="utf-8") as f:
@@ -299,6 +370,27 @@ class RepairJacobian:
                         self.matrix[sig_key][pid] = JacobianEntry(**entry_data)
             except Exception as e:
                 print(f"  Warning: failed to load Jacobian matrix: {e}")
+
+        state_path = self.base_dir / "state.json"
+        if state_path.exists():
+            try:
+                raw = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assigned_failure_streaks = {
+                    str(sig_key): {
+                        str(pattern_id): int(value)
+                        for pattern_id, value in pattern_map.items()
+                    }
+                    for sig_key, pattern_map in raw.get("assigned_failure_streaks", {}).items()
+                }
+                self.assigned_pattern_cooldowns = {
+                    str(sig_key): {
+                        str(pattern_id): int(value)
+                        for pattern_id, value in pattern_map.items()
+                    }
+                    for sig_key, pattern_map in raw.get("assigned_pattern_cooldowns", {}).items()
+                }
+            except Exception as e:
+                print(f"  Warning: failed to load Jacobian state: {e}")
 
         # Outcomes are append-only on disk; don't reload into memory
         # (they're for offline analysis, not online recommendation)
