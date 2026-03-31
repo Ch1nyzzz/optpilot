@@ -47,19 +47,26 @@ def test_fm_rate_with_active_profiles():
     assert fm_rate("B", []) == 0.0
 
 
-def test_rank_fm_groups_uses_primary_failure_only():
-    p1 = FMProfile(trace_id=1, primary_fm_id="B")
+def test_rank_fm_groups_counts_all_active_issues():
+    p1 = FMProfile(trace_id=1)
     p1.labels["B"] = FMLabel(fm_id="B", fm_name="Loop", category="B", present=True)
     p1.labels["F"] = FMLabel(fm_id="F", fm_name="Verify", category="F", present=True)
 
-    p2 = FMProfile(trace_id=2, primary_fm_id="F")
+    p2 = FMProfile(trace_id=2)
     p2.labels["B"] = FMLabel(fm_id="B", fm_name="Loop", category="B", present=True)
     p2.labels["F"] = FMLabel(fm_id="F", fm_name="Verify", category="F", present=True)
 
-    p3 = FMProfile(trace_id=3, primary_fm_id="F")
+    p3 = FMProfile(trace_id=3)
     p3.labels["F"] = FMLabel(fm_id="F", fm_name="Verify", category="F", present=True)
 
-    assert rank_fm_groups([p1, p2, p3], min_support=1) == [("F", 2), ("B", 1)]
+    assert rank_fm_groups([p1, p2, p3], min_support=1) == [("F", 3), ("B", 2)]
+
+
+def test_rank_fm_groups_does_not_require_two_examples():
+    p1 = FMProfile(trace_id=1)
+    p1.labels["B"] = FMLabel(fm_id="B", fm_name="Loop", category="B", present=True)
+
+    assert rank_fm_groups([p1]) == [("B", 1)]
 
 
 def test_has_material_change_detects_dag_difference():
@@ -327,7 +334,7 @@ async def test_aoptimize_samples_balanced_active_subset(monkeypatch):
     )
 
     seen_task_batches: list[list[str]] = []
-    batch_scores = [0.0, 1.0]
+    batch_scores = [0.0, 1.0, 1.0]
 
     class _AsyncRunner:
         benchmark_name_resolver = staticmethod(lambda task: task.split(":", 1)[0])
@@ -375,8 +382,85 @@ async def test_aoptimize_samples_balanced_active_subset(monkeypatch):
         eval_tasks_per_round=4,
     )
 
-    assert seen_task_batches[0] == seen_task_batches[1]
-    assert {task.split(":", 1)[0] for task in seen_task_batches[0]} == {"A", "B", "C", "D"}
+    assert {task.split(":", 1)[0] for task in seen_task_batches[-1]} == {"A", "B", "C", "D"}
+
+
+@pytest.mark.anyio
+async def test_aoptimize_seeds_first_round_with_twenty_failures(monkeypatch):
+    dag = MASDAG(
+        dag_id="test",
+        nodes={
+            "start": DAGNode(node_id="start", node_type="literal", prompt="begin"),
+            "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+        },
+        edges=[DAGEdge(source="start", target="FINAL")],
+        metadata={"start": ["start"]},
+    )
+    repaired = MASDAG(
+        dag_id="test",
+        nodes={
+            "start": DAGNode(node_id="start", node_type="literal", prompt="repaired"),
+            "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+        },
+        edges=[DAGEdge(source="start", target="FINAL")],
+        metadata={"start": ["start"]},
+    )
+
+    seen_task_batches: list[list[str]] = []
+    analyzed_sizes: list[int] = []
+
+    class _AsyncRunner:
+        benchmark_name_resolver = staticmethod(lambda task: task.split(":", 1)[0])
+
+        async def arun_batch(self, tasks, dag=None, output_base=None, max_concurrency=256):
+            seen_task_batches.append(list(tasks))
+            prompt = dag.nodes["start"].prompt if dag is not None else "begin"
+            score = 1.0 if prompt == "repaired" else 0.0
+            return [_make_trace(i, score=score) for i in range(len(tasks))]
+
+    class _AsyncDiagnoser:
+        async def aclassify_batch(self, traces):
+            return [_make_profile(i, fm_active=True) for i in range(len(traces))]
+
+    async def fake_agenerate_evolve_candidates(
+        dag, fm_group, analysis, negatives, history,
+        recommended_pattern=None, recommended_patterns=None, traces=None, profiles=None,
+    ):
+        return [EvolveResult(
+            dag=repaired,
+            analysis_text="fixed prompt",
+            modified_source="source",
+            change_description="fixed prompt",
+            actions_taken=["change"],
+            metadata={"observed_pattern_id": "prompt_add_constraint"},
+        )]
+
+    def fake_analyze(dag, fm_group, traces, profiles, negatives):
+        analyzed_sizes.append(len(traces))
+        return AnalysisResult(
+            fm_id=fm_group, fm_rate=1.0,
+            metadata={"dag_components": [], "proposal_traces": [], "failure_signatures": []},
+        )
+
+    monkeypatch.setattr(
+        "optpilot.orchestrator.agenerate_evolve_candidates",
+        fake_agenerate_evolve_candidates,
+    )
+    monkeypatch.setattr("optpilot.orchestrator.analyze", fake_analyze)
+
+    orchestrator = Orchestrator(runner=_AsyncRunner(), dag=dag)
+    orchestrator.diagnoser = _AsyncDiagnoser()
+
+    tasks = [f"{chr(65 + (i % 4))}:{i}" for i in range(24)]
+    await orchestrator.aoptimize(
+        tasks=tasks,
+        max_rounds=1,
+        eval_tasks_per_round=4,
+    )
+
+    assert analyzed_sizes == [20]
+    assert [len(batch) for batch in seen_task_batches[:5]] == [4, 4, 4, 4, 4]
+    assert len(seen_task_batches[5]) == 20
 
 
 @pytest.mark.anyio
@@ -392,7 +476,7 @@ async def test_aoptimize_runs_shadow_gate_every_interval(monkeypatch):
     )
 
     seen_task_batches: list[list[str]] = []
-    batch_scores = [0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
+    batch_scores = [0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0]
     candidate_counter = {"value": 0}
 
     class _AsyncRunner:
@@ -456,11 +540,10 @@ async def test_aoptimize_runs_shadow_gate_every_interval(monkeypatch):
         eval_tasks_per_round=4,
     )
 
-    assert len(seen_task_batches) == 6
-    assert seen_task_batches[0] == seen_task_batches[1]
-    assert seen_task_batches[2] == seen_task_batches[3]
-    assert seen_task_batches[4] == seen_task_batches[5]
-    assert set(seen_task_batches[4]).isdisjoint(seen_task_batches[2])
+    assert len(seen_task_batches) == 7
+    assert seen_task_batches[3] == seen_task_batches[4]
+    assert seen_task_batches[5] == seen_task_batches[6]
+    assert set(seen_task_batches[5]).isdisjoint(seen_task_batches[3])
 
 
 @pytest.mark.anyio
@@ -475,7 +558,7 @@ async def test_shadow_gate_uses_accuracy_only(monkeypatch, tmp_path):
         metadata={"start": ["start"]},
     )
 
-    batch_scores = [0.0, 1.0, 1.0, 1.0]
+    batch_scores = [0.0, 1.0, 1.0, 1.0, 1.0]
     classify_calls = {"count": 0}
 
     class _AsyncRunner:
@@ -550,7 +633,7 @@ async def test_shadow_rejection_records_diagnosis_metadata(monkeypatch, tmp_path
         metadata={"start": ["start"]},
     )
 
-    batch_scores = [0.0, 1.0, 1.0, 0.0]
+    batch_scores = [0.0, 1.0, 1.0, 1.0, 0.0]
 
     class _AsyncRunner:
         benchmark_name_resolver = staticmethod(lambda task: task.split(":", 1)[0])
@@ -566,21 +649,6 @@ async def test_shadow_rejection_records_diagnosis_metadata(monkeypatch, tmp_path
     class _AsyncDiagnoser:
         async def aclassify_batch(self, traces):
             return [_make_profile(i, fm_active=True) for i in range(len(traces))]
-
-        async def adiagnose_batch(self, traces, target_group=None):
-            profiles = []
-            for i, trace in enumerate(traces):
-                p = _make_profile(i, fm_active=True)
-                p.primary_fm_id = "B"
-                p.primary_localization = FMLocalization(
-                    agent="Agent_Verifier",
-                    step="shadow",
-                    context="shadow regression",
-                    root_cause="Verifier-focused prompt change overfit the active batch.",
-                    dag_component="agent_prompt",
-                )
-                profiles.append(p)
-            return profiles
 
     async def fake_agenerate_evolve_candidates(
         dag, fm_group, analysis, negatives, history,
@@ -644,7 +712,7 @@ async def test_shadow_rejection_records_diagnosis_metadata(monkeypatch, tmp_path
     shadow = saved[0]["metadata"]["shadow_gate"]
     assert shadow["candidate_change_description"] == "strengthen verifier instructions"
     assert shadow["observed_pattern_id"] == "prompt_strengthen_verification"
-    assert shadow["diagnostics"][0]["root_cause"] == "Verifier-focused prompt change overfit the active batch."
+    assert shadow["diagnostics"][0]["active_fm_ids"] == ["B"]
 
 
 @pytest.mark.anyio
@@ -660,7 +728,7 @@ async def test_meta_evolve_triggers_after_three_shadow_rejections(monkeypatch, t
     )
 
     batch_scores = [
-        0.0, 1.0, 1.0, 0.0,
+        0.0, 1.0, 1.0, 1.0, 0.0,
         0.0, 1.0, 1.0, 0.0,
         0.0, 1.0, 1.0, 0.0,
     ]

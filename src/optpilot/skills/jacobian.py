@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from optpilot.config import (
+    JACOBIAN_APPLIED_DECAY,
     JACOBIAN_PATTERN_COOLDOWN_ROUNDS,
     JACOBIAN_PATTERN_FAILURE_COOLDOWN_THRESHOLD,
     LIBRARY_DIR,
@@ -127,16 +128,24 @@ class RepairJacobian:
         self,
         sig: FailureSignature,
         top_k: int = 3,
+        applied_patterns: set[str] | None = None,
     ) -> list[tuple[RepairPattern, float]]:
         """Recommend top-k repair patterns for a failure signature.
 
         Returns list of (RepairPattern, score) sorted by score descending.
         Score = success_rate when data exists, or an FM-group prior for cold
         start.
+
+        Args:
+            applied_patterns: Pattern IDs already successfully applied in this
+                optimization session.  Their scores are multiplied by
+                ``JACOBIAN_APPLIED_DECAY`` (default 0.3) to encourage
+                diversity — the same change type yields diminishing returns.
         """
         sig_key = sig.signature_key()
         entries = self.matrix.get(sig_key, {})
         cooldowns = self.assigned_pattern_cooldowns.get(sig_key, {})
+        applied = applied_patterns or set()
 
         scored: list[tuple[str, float]] = []
         blocked_pattern_ids: set[str] = {
@@ -148,14 +157,15 @@ class RepairJacobian:
                 continue
             entry = entries.get(pattern_id)
             if entry and entry.n_applied >= 1:
-                # Data-driven score: blend empirical success_rate with cold-start prior.
-                # As n_applied grows, trust data more; at n=1 still weight data > prior.
                 prior = self._cold_start_score(sig, pattern)
-                alpha = entry.n_applied / (entry.n_applied + 2.0)  # at n=1: 0.33, n=3: 0.6, n=5: 0.71
+                alpha = entry.n_applied / (entry.n_applied + 2.0)
                 score = alpha * entry.success_rate + (1 - alpha) * prior
             else:
-                # Cold-start: heuristic prior based on FM group.
                 score = self._cold_start_score(sig, pattern)
+
+            # Diminishing returns: decay score for already-applied patterns
+            if pattern_id in applied:
+                score *= JACOBIAN_APPLIED_DECAY
 
             scored.append((pattern_id, score))
 
@@ -168,6 +178,8 @@ class RepairJacobian:
                     score = alpha * entry.success_rate + (1 - alpha) * prior
                 else:
                     score = self._cold_start_score(sig, pattern)
+                if pattern_id in applied:
+                    score *= JACOBIAN_APPLIED_DECAY
                 scored.append((pattern_id, score))
 
         if blocked_pattern_ids:
@@ -189,10 +201,33 @@ class RepairJacobian:
             results.append((pattern, score))
         return results
 
-    @staticmethod
-    def _cold_start_score(sig: FailureSignature, pattern: RepairPattern) -> float:
-        """Heuristic score when no empirical data exists."""
-        priors: dict[str, dict[str, float]] = {
+    def _cold_start_score(self, sig: FailureSignature, pattern: RepairPattern) -> float:
+        """Prior score when no empirical data exists.
+
+        Loads data-driven priors from ``library_store/jacobian/data_driven_priors.json``
+        (produced by offline OpenEvolve trace analysis).  Falls back to hand-coded
+        heuristics only when the data-driven file is absent.
+        """
+        priors = self._load_priors()
+        return priors.get(sig.fm_group, {}).get(pattern.pattern_id, 0.10)
+
+    def _load_priors(self) -> dict[str, dict[str, float]]:
+        """Load priors, preferring data-driven over hand-coded."""
+        if hasattr(self, "_cached_priors"):
+            return self._cached_priors
+
+        data_priors_path = self.base_dir / "data_driven_priors.json"
+        if data_priors_path.exists():
+            try:
+                self._cached_priors = json.loads(
+                    data_priors_path.read_text(encoding="utf-8")
+                )
+                return self._cached_priors
+            except Exception:
+                pass
+
+        # Fallback: hand-coded heuristics (used only before first offline analysis)
+        self._cached_priors: dict[str, dict[str, float]] = {
             "A": {
                 "prompt_add_constraint": 0.55,
                 "prompt_narrow_role": 0.45,
@@ -224,7 +259,7 @@ class RepairJacobian:
                 "loop_add_retry": 0.20,
             },
         }
-        return priors.get(sig.fm_group, {}).get(pattern.pattern_id, 0.10)
+        return self._cached_priors
 
     # ---------------------------------------------------------------- #
     #  Update                                                           #

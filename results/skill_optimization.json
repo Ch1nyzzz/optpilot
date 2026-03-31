@@ -1,15 +1,35 @@
 [
   {
-    "timestamp": "2026-03-27T14:53:52.087303",
+    "timestamp": "2026-03-30T23:21:19.022380",
     "round": 1,
     "fm_id": "B",
     "fm_name": "Execution Loop / Stuck",
     "success": false,
-    "inner_iterations": 0,
-    "outer_rounds": 0,
     "final_fm_rate": 1.0,
-    "final_pass_rate": 0.0,
-    "n_negatives": 0,
+    "final_pass_rate": 1.0,
+    "final_fitness": 1.0,
     "step": 0
+  },
+  {
+    "timestamp": "2026-03-30T23:21:19.022823",
+    "round": 2,
+    "fm_id": "B",
+    "fm_name": "Execution Loop / Stuck",
+    "success": false,
+    "final_fm_rate": 1.0,
+    "final_pass_rate": 1.0,
+    "final_fitness": 1.0,
+    "step": 1
+  },
+  {
+    "timestamp": "2026-03-30T23:21:19.023364",
+    "round": 3,
+    "fm_id": "B",
+    "fm_name": "Execution Loop / Stuck",
+    "success": false,
+    "final_fm_rate": 1.0,
+    "final_pass_rate": 1.0,
+    "final_fitness": 1.0,
+    "step": 2
   }
 ]

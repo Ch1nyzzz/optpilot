@@ -55,15 +55,14 @@ def extract_failure_signatures(
 ) -> list[FailureSignature]:
     """Extract FailureSignatures from profiles for a given FM group.
 
-    The online recommender is FM-group keyed and uses one dominant failure per
-    task. Localization-derived metadata is retained when available, but it does
-    not change the row key.
+    The online recommender is FM-group keyed. Localization-derived metadata is
+    retained when available, but it does not change the row key.
     """
     signatures: list[FailureSignature] = []
     for profile in profiles:
-        if profile.primary_failure_id() != fm_group:
+        if fm_group not in profile.active_fm_ids():
             continue
-        loc = profile.primary_localization or profile.localization.get(fm_group)
+        loc = profile.localization.get(fm_group)
         if loc is None:
             signatures.append(FailureSignature(
                 fm_group=fm_group,
@@ -358,185 +357,107 @@ class PatternCatalog:
 
 
 # ------------------------------------------------------------------ #
-#  Observed pattern inference from change records                      #
+#  Change Types — canonical taxonomy of observable DAG mutations        #
 # ------------------------------------------------------------------ #
 
-# Keyword sets for each pattern category
-_PROMPT_KEYWORDS = re.compile(
-    r"\b(prompt|role|instruction|system_prompt|You are|must|should|always|never|"
-    r"step.by.step|verify|check|ensure|require)\b",
-    re.IGNORECASE,
-)
-_EDGE_CARRY_KEYWORDS = re.compile(
-    r"\b(carry_data|carry|data.*flow|context.*pass|propagat)\b",
-    re.IGNORECASE,
-)
-_EDGE_CONDITION_KEYWORDS = re.compile(
-    r"\b(condition|trigger|keyword|match|route|routing)\b",
-    re.IGNORECASE,
-)
-_TOPO_KEYWORDS = re.compile(
-    r"\b(add.*node|new.*agent|add.*agent|DAGNode|node_type.*agent|"
-    r"split.*agent|remove.*node)\b",
-    re.IGNORECASE,
-)
-_LOOP_KEYWORDS = re.compile(
-    r"\b(loop|max_iteration|loop_counter|exit|continue|retry|max_turns)\b",
-    re.IGNORECASE,
-)
-_CONFIG_KEYWORDS = re.compile(
-    r"\b(temperature|max_tokens|top_p|params|config\[)\b",
-    re.IGNORECASE,
-)
-_EDGE_ADD_KEYWORDS = re.compile(
-    r"\b(DAGEdge|add.*edge|new.*edge|edges\.append|missing.*edge)\b",
-    re.IGNORECASE,
-)
+CHANGE_TYPES: dict[str, str] = {
+    "prompt_refine": "Modified agent's system prompt (add constraints, reasoning steps, narrow role, etc.)",
+    "topology_change": "Added or removed agent nodes (structural DAG change)",
+    "edge_route": "Added, removed, or modified edges (carry_data, condition, trigger)",
+    "config_tune": "Changed agent parameters (temperature, max_tokens)",
+    "loop_adjust": "Changed loop configuration (max_iterations, exit conditions)",
+    "literal_update": "Changed literal/introduction content",
+}
 
 
-def infer_observed_pattern(change_records: list[Any]) -> str:
-    """Infer the dominant repair pattern from change_records.
-
-    Analyzes the combined old_str/new_str text to classify the type of
-    modification.  Returns a pattern_id or "" if mixed/unclassifiable.
-    """
-    if not change_records:
-        return ""
-
-    # Collect all changed text for analysis
-    all_new_text = []
-    all_old_text = []
-    for cr in change_records:
-        old_str = cr.old_str if hasattr(cr, "old_str") else cr.get("old_str", "")
-        new_str = cr.new_str if hasattr(cr, "new_str") else cr.get("new_str", "")
-        all_old_text.append(old_str)
-        all_new_text.append(new_str)
-
-    combined_old = "\n".join(all_old_text)
-    combined_new = "\n".join(all_new_text)
-    # Focus on what was added (the diff)
-    combined = combined_new + "\n" + combined_old
-
-    # Score each category
-    scores: dict[str, int] = {
-        "prompt": len(_PROMPT_KEYWORDS.findall(combined)),
-        "edge_carry": len(_EDGE_CARRY_KEYWORDS.findall(combined)),
-        "edge_condition": len(_EDGE_CONDITION_KEYWORDS.findall(combined)),
-        "topo": len(_TOPO_KEYWORDS.findall(combined)),
-        "loop": len(_LOOP_KEYWORDS.findall(combined)),
-        "config": len(_CONFIG_KEYWORDS.findall(combined)),
-        "edge_add": len(_EDGE_ADD_KEYWORDS.findall(combined)),
-    }
-
-    if sum(scores.values()) == 0:
-        return ""
-
-    top_category = max(scores, key=lambda k: scores[k])
-    top_score = scores[top_category]
-
-    # If no clear winner (top < 2 or close to second), return mixed
-    sorted_scores = sorted(scores.values(), reverse=True)
-    if top_score < 2:
-        return ""
-    if len(sorted_scores) > 1 and sorted_scores[1] > 0:
-        ratio = top_score / sorted_scores[1]
-        if ratio < 1.5:
-            return ""  # too close to call
-
-    # Map category to most likely pattern_id
-    category_to_pattern: dict[str, str] = {
-        "prompt": "prompt_add_constraint",  # generic prompt change
-        "edge_carry": "edge_fix_carry_data",
-        "edge_condition": "edge_add_condition",
-        "topo": "topo_add_verification_node",
-        "loop": "loop_fix_config",
-        "config": "config_adjust_params",
-        "edge_add": "edge_add_missing",
-    }
-    return category_to_pattern.get(top_category, "")
-
+# ------------------------------------------------------------------ #
+#  Fast deterministic inference (online path)                          #
+# ------------------------------------------------------------------ #
 
 def infer_observed_pattern_from_dags(
     original_dag: MASDAG,
     candidate_dag: MASDAG,
 ) -> str:
-    """Infer the dominant observed repair pattern from DAG-level changes.
+    """Fast deterministic change-type inference from DAG structural diff.
 
-    This is the online attribution path used by the Jacobian. It intentionally
-    maps concrete edits into a small, stable pattern vocabulary.
-
-    Returns:
-        A pattern_id when the change is dominated by one pattern family, or
-        ``""`` when the edit is mixed / unclassifiable.
+    Used as the online attribution path by the Jacobian. Returns the dominant
+    change type when the edit is clearly dominated by one category, or ``""``
+    when the edit is mixed / unclassifiable.
     """
     categories = _dag_change_categories(original_dag, candidate_dag)
     if len(categories) != 1:
         return ""
+    return next(iter(categories))
 
-    category = next(iter(categories))
-    category_to_pattern = {
-        "prompt": "prompt_add_constraint",
-        "edge_carry": "edge_fix_carry_data",
-        "edge_condition": "edge_add_condition",
-        "topology": "topo_add_verification_node",
-        "loop": "loop_fix_config",
-        "config": "config_adjust_params",
-        "edge_add": "edge_add_missing",
-    }
-    return category_to_pattern.get(category, "")
+
+def infer_all_change_types_from_dags(
+    original_dag: MASDAG,
+    candidate_dag: MASDAG,
+) -> list[str]:
+    """Return all change types present in a DAG diff (may be multiple)."""
+    return sorted(_dag_change_categories(original_dag, candidate_dag))
 
 
 def _dag_change_categories(
     original_dag: MASDAG,
     candidate_dag: MASDAG,
 ) -> set[str]:
-    """Classify DAG-level differences into coarse repair categories."""
+    """Classify DAG-level differences into change types."""
     categories: set[str] = set()
 
     original_nodes = original_dag.nodes
     candidate_nodes = candidate_dag.nodes
 
+    # Topology: agent nodes added or removed
     original_agents = {nid for nid, node in original_nodes.items() if node.node_type == "agent"}
     candidate_agents = {nid for nid, node in candidate_nodes.items() if node.node_type == "agent"}
     if original_agents != candidate_agents:
-        categories.add("topology")
+        categories.add("topology_change")
 
+    # Edge routing: edges added, removed, or modified
     original_edges = {_edge_key(edge): edge for edge in original_dag.edges}
     candidate_edges = {_edge_key(edge): edge for edge in candidate_dag.edges}
     if set(original_edges) != set(candidate_edges):
-        categories.add("edge_add")
+        categories.add("edge_route")
 
+    # Check shared edges for attribute changes
+    for edge_key in set(original_edges) & set(candidate_edges):
+        old_edge = original_edges[edge_key]
+        new_edge = candidate_edges[edge_key]
+        if (old_edge.carry_data != new_edge.carry_data
+                or old_edge.condition != new_edge.condition
+                or old_edge.trigger != new_edge.trigger):
+            categories.add("edge_route")
+        old_loop = old_edge.config.get("loop", "") if old_edge.config else ""
+        new_loop = new_edge.config.get("loop", "") if new_edge.config else ""
+        if old_loop != new_loop:
+            categories.add("loop_adjust")
+
+    # Check shared nodes
     shared_nodes = set(original_nodes) & set(candidate_nodes)
     for node_id in shared_nodes:
         old_node = original_nodes[node_id]
         new_node = candidate_nodes[node_id]
 
         if old_node.node_type != new_node.node_type:
-            categories.add("topology")
+            categories.add("topology_change")
             continue
 
         if old_node.node_type == "agent":
             if old_node.prompt != new_node.prompt or old_node.role != new_node.role:
-                categories.add("prompt")
+                categories.add("prompt_refine")
             if _agent_params(old_node.config) != _agent_params(new_node.config):
-                categories.add("config")
+                categories.add("config_tune")
         elif old_node.node_type == "loop_counter":
             if old_node.config != new_node.config:
-                categories.add("loop")
+                categories.add("loop_adjust")
+        elif old_node.node_type == "literal":
+            old_content = (old_node.config or {}).get("content", "")
+            new_content = (new_node.config or {}).get("content", "")
+            if old_content != new_content:
+                categories.add("literal_update")
         elif old_node.config != new_node.config:
-            categories.add("config")
-
-    for edge_key in set(original_edges) & set(candidate_edges):
-        old_edge = original_edges[edge_key]
-        new_edge = candidate_edges[edge_key]
-        if old_edge.carry_data != new_edge.carry_data:
-            categories.add("edge_carry")
-        if old_edge.condition != new_edge.condition or old_edge.trigger != new_edge.trigger:
-            categories.add("edge_condition")
-        old_loop = old_edge.config.get("loop", "") if old_edge.config else ""
-        new_loop = new_edge.config.get("loop", "") if new_edge.config else ""
-        if old_loop != new_loop:
-            categories.add("loop")
+            categories.add("config_tune")
 
     return categories
 
@@ -547,3 +468,79 @@ def _edge_key(edge: Any) -> tuple[str, str]:
 
 def _agent_params(config: dict[str, Any]) -> Any:
     return (config or {}).get("params", {})
+
+
+# ------------------------------------------------------------------ #
+#  LLM-based mutation analysis (offline path)                          #
+# ------------------------------------------------------------------ #
+
+MUTATION_ANALYSIS_PROMPT = """\
+You are analyzing a mutation between two versions of a multi-agent DAG.
+
+## Change Types (pick ALL that apply)
+- prompt_refine: Modified agent's system prompt
+- topology_change: Added or removed agent nodes
+- edge_route: Added, removed, or modified edges (carry_data, condition, trigger)
+- config_tune: Changed agent parameters (temperature, max_tokens)
+- loop_adjust: Changed loop configuration
+- literal_update: Changed literal/introduction content
+
+## FM Groups
+- A: Instruction Non-Compliance
+- B: Execution Loop / Stuck
+- C: Context Loss
+- D: Communication Failure
+- E: Task Drift / Reasoning Error
+- F: Verification Failure
+
+## Parent code
+```python
+{parent_code}
+```
+
+## Child code
+```python
+{child_code}
+```
+
+## FM rate changes (negative = improvement)
+{fm_deltas}
+
+Respond ONLY with valid JSON:
+{{
+  "changes": [
+    {{"type": "<change_type>", "target": "<node_id or edge>", "summary": "<what changed>"}}
+  ],
+  "likely_fixed_fm": ["<FM group IDs that improved>"],
+  "primary_change_type": "<the single most impactful change type>",
+  "reasoning": "<1-2 sentences explaining why this mutation was effective>"
+}}
+"""
+
+
+def build_mutation_analysis_prompt(
+    parent_code: str,
+    child_code: str,
+    fm_deltas: dict[str, float],
+) -> str:
+    """Build LLM prompt for offline mutation analysis."""
+    delta_lines = []
+    for gid in sorted(fm_deltas):
+        delta = fm_deltas[gid]
+        direction = "improved" if delta < 0 else ("unchanged" if delta == 0 else "worsened")
+        delta_lines.append(f"  {gid}: {delta:+.3f} ({direction})")
+    return MUTATION_ANALYSIS_PROMPT.format(
+        parent_code=parent_code.strip(),
+        child_code=child_code.strip(),
+        fm_deltas="\n".join(delta_lines) or "  (no FM data)",
+    )
+
+
+def infer_observed_pattern(change_records: list[Any]) -> str:
+    """Legacy API for backward compatibility with deprecated base.py.
+
+    The old keyword-based heuristic has been replaced by LLM analysis
+    (offline) and DAG-diff (online).  Returns ``""`` — callers should
+    migrate to ``infer_observed_pattern_from_dags`` or LLM-based analysis.
+    """
+    return ""

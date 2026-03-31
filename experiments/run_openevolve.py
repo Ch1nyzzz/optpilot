@@ -1,30 +1,25 @@
-"""AG2 MathChat × OpenEvolve — Baseline comparison experiment.
+"""Multi-topology OpenEvolve cold-start experiment.
 
-Uses SkyDiscover's OpenEvolve (native MAP-Elites) to evolve the AG2 MathChat
-YAML DAG, with MAST-style FM rates as the fitness signal.  This is the
-"general evolver" baseline to compare against OptPilot's targeted Skill
-Workflows.
+Evolves MAS DAG topologies via SkyDiscover's OpenEvolve (MAP-Elites).
+Supports multiple topologies and their corresponding benchmarks:
 
-Aligned with the MAST+OpenEvolve blog:
-  - 50 iterations
-  - 20 tasks per evaluation
-  - Fitness = 1/(1+total_failures), ×1.2 if correct, -0.01 per agent > 4
-  - No diagnosis-driven repair — only FM rates as feedback
+  - ag2:        AG2 MathChat (3-agent linear) on MMLU/AIME/OlympiadBench
+  - appworld:   AppWorld Star (Supervisor + specialists) on multi-step API tasks
+  - hyperagent: HyperAgent Hierarchical (Planner → sub-agents) on SWE-bench Lite
+  - magentic:   Magentic-One Star (Orchestrator + 4 agents) on GAIA
 
 Usage:
-    python -m experiments.run_ag2_mathchat_openevolve \\
-        --model openai/gpt-oss-120b \\
-        --train 100 --test 100 \\
-        --iterations 50 \\
-        --concurrency 512 \\
-        --timeout 600
+    # AG2 MathChat (linear, math)
+    python -m experiments.run_openevolve --topology ag2 --iterations 50
 
-    # With pre-computed diagnose results (skips initial diagnose):
-    python -m experiments.run_ag2_mathchat_openevolve \\
-        --model openai/gpt-oss-120b \\
-        --train 100 --test 100 \\
-        --iterations 50 \\
-        --reuse-diagnose-dir results/.../diagnose
+    # AppWorld (star, API tasks)
+    python -m experiments.run_openevolve --topology appworld --iterations 50
+
+    # HyperAgent (hierarchical, code fixing)
+    python -m experiments.run_openevolve --topology hyperagent --iterations 50
+
+    # Magentic-One (complex star, general tasks)
+    python -m experiments.run_openevolve --topology magentic --iterations 50
 """
 
 import argparse
@@ -184,6 +179,8 @@ def run(
     # Load benchmarks per topology
     # ------------------------------------------------------------------
     print(f"Loading benchmarks for topology={topology}...")
+    custom_score_fn = None  # None = use test_suite.score_task (works for ag2)
+
     if topology == "ag2":
         full_suite = load_online_benchmark_suite(total)
         train_examples, test_examples = _split_suite(full_suite, n_train)
@@ -191,7 +188,7 @@ def run(
         tool_setup_fn = None
     elif topology == "appworld":
         from optpilot.data.benchmarks_appworld import load_appworld_examples, score_appworld
-        from optpilot.tools.appworld_tools import AppWorldEnvironment, build_tools as aw_build
+        from optpilot.tools.appworld_tools import AppWorldWrapper, build_tools as aw_build
         all_examples = load_appworld_examples(total)
         train_examples = all_examples[:n_train]
         test_examples = all_examples[n_train:n_train + n_test]
@@ -201,19 +198,35 @@ def run(
             ex = _aw_lookup.get(task_prompt)
             if ex is None:
                 return None
-            return aw_build(AppWorldEnvironment(ex.metadata.get("initial_state", {})))
+            wrapper = AppWorldWrapper(task_id=ex.task_id, experiment_name="openevolve")
+            return aw_build(wrapper)
+        def custom_score_fn(task_prompt, _dag, exec_trace):
+            ex = _aw_lookup.get(task_prompt)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_appworld(pred, ex.gold_answers[0])
     elif topology == "hyperagent":
-        from optpilot.data.benchmarks_swebench import load_swebench_examples
+        from optpilot.data.benchmarks_swebench import load_swebench_examples, score_swebench
         all_examples = load_swebench_examples(total)
         train_examples = all_examples[:n_train]
         test_examples = all_examples[n_train:n_train + n_test]
         benchmark_label = "SWE-bench-Lite"
+        _ha_lookup = {ex.prompt: ex for ex in all_examples}
         def tool_setup_fn(task_prompt):
             from optpilot.tools.hyperagent_tools import CodeEnvironment, build_tools as ha_build
-            import tempfile
-            return ha_build(CodeEnvironment(tempfile.mkdtemp(prefix="swebench_")))
+            ex = _ha_lookup.get(task_prompt)
+            repo = ex.metadata.get("repo", "") if ex else ""
+            base_commit = ex.metadata.get("base_commit", "") if ex else ""
+            return ha_build(CodeEnvironment(repo=repo, base_commit=base_commit))
+        def custom_score_fn(task_prompt, _dag, exec_trace):
+            ex = _ha_lookup.get(task_prompt)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_swebench(pred, ex.gold_answers[0])
     elif topology == "magentic":
-        from optpilot.data.benchmarks_gaia import load_gaia_examples
+        from optpilot.data.benchmarks_gaia import load_gaia_examples, score_gaia
         from optpilot.tools.magentic_tools import GeneralEnvironment, build_tools as mg_build
         all_examples = load_gaia_examples(total)
         train_examples = all_examples[:n_train]
@@ -224,6 +237,12 @@ def run(
             ex = _mg_lookup.get(task_prompt)
             docs = ex.metadata.get("context_docs", {}) if ex else {}
             return mg_build(GeneralEnvironment(docs))
+        def custom_score_fn(task_prompt, _dag, exec_trace):
+            ex = _mg_lookup.get(task_prompt)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_gaia(pred, ex.gold_answers[0])
     else:
         raise ValueError(f"Unknown topology: {topology}")
 
@@ -245,7 +264,7 @@ def run(
         dag=original_dag,
         model=model,
         benchmark_name=benchmark_label,
-        score_fn=train_suite.score_task,
+        score_fn=custom_score_fn or train_suite.score_task,
         benchmark_name_resolver=train_suite.benchmark_name_for_task,
         timeout=timeout,
         tool_setup_fn=tool_setup_fn,
@@ -371,7 +390,7 @@ def run(
         dag=original_dag,
         model=model,
         benchmark_name=benchmark_label,
-        score_fn=test_suite.score_task,
+        score_fn=custom_score_fn or test_suite.score_task,
         benchmark_name_resolver=test_suite.benchmark_name_for_task,
         timeout=timeout,
         tool_setup_fn=tool_setup_fn,

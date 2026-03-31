@@ -1,0 +1,24 @@
+[
+  {
+    "recipe_id": "A_topology_change_0",
+    "fm_group": "A",
+    "change_type": "topology_change",
+    "precondition": "The system exhibits instruction non‑compliance, frequent loops, or verification failures that trace back to many intermediate agent hand‑offs (e.g., Planner, Checker, Summarizer) and complex edge triggers.",
+    "action": "Simplify the DAG by removing the unnecessary intermediate agents (Planner, Checker, Summarizer) and all edges that involve them. Add direct edges from the upstream source (User or Introduction) to the core agents (Problem Solver, Code Executor, Verifier). Set the edge triggers so that required data flows are triggered (trigger:true) and optional hand‑offs are disabled (trigger:false). Update the introduction text and any system prompts to describe the new streamlined three‑agent workflow. Optionally lower the temperature of the remaining agents for more deterministic output.",
+    "root_cause": "Extra routing nodes create instruction drift, communication loss, and verification bottlenecks; eliminating them restores a clear, deterministic data path.",
+    "n_effective": 8,
+    "avg_test_delta": 0.049999999999999975,
+    "example_diffs": []
+  },
+  {
+    "recipe_id": "A_topology_change_1",
+    "fm_group": "A",
+    "change_type": "topology_change",
+    "precondition": "Instruction non‑compliance is caused by the absence of an explicit consistency check between the Solver and Executor outputs, leading to ambiguous or contradictory results that the Verifier cannot reliably assess.",
+    "action": "Insert a dedicated Checker agent node. Create a system prompt for the Checker that requires it to output only a CONSISTENT or INCONSISTENT token. Add triggered edges that carry the Solver output and the Executor output to the Checker (carry_data:true). Add a triggered edge that passes the Checker’s consistency flag to the Verifier. Refine the Verifier prompt to require the consistency flag and to forbid any extra text beyond the required SOLUTION_FOUND line. Update the introduction to mention the new Checker step and adjust any literal descriptions accordingly.",
+    "root_cause": "Lack of an explicit consistency‑validation step allows mismatched Solver/Executor results to pass unchecked, causing the downstream verifier to misinterpret instructions.",
+    "n_effective": 8,
+    "avg_test_delta": 0.049999999999999975,
+    "example_diffs": []
+  }
+]

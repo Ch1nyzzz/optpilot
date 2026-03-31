@@ -19,6 +19,41 @@ from datetime import datetime
 from statistics import mean
 from typing import TYPE_CHECKING, Any
 
+try:
+    from skydiscover.utils.code_utils import (
+        apply_diff as _apply_skydiscover_diff,
+        extract_diffs as _extract_skydiscover_diffs,
+        parse_full_rewrite as _parse_skydiscover_full_rewrite,
+    )
+except ImportError:
+    def _apply_skydiscover_diff(original_solution: str, diff_text: str) -> str:
+        original_lines = original_solution.split("\n")
+        result_lines = original_lines.copy()
+        for search_text, replace_text in _extract_skydiscover_diffs(diff_text):
+            search_lines = search_text.split("\n")
+            replace_lines = replace_text.split("\n")
+            for i in range(len(result_lines) - len(search_lines) + 1):
+                if result_lines[i : i + len(search_lines)] == search_lines:
+                    result_lines[i : i + len(search_lines)] = replace_lines
+                    break
+        return "\n".join(result_lines)
+
+    def _extract_skydiscover_diffs(diff_text: str) -> list[tuple[str, str]]:
+        diff_pattern = r"<<<<<<< SEARCH\n(.*?)=======\n(.*?)>>>>>>> REPLACE"
+        diff_blocks = re.findall(diff_pattern, diff_text, re.DOTALL)
+        return [(match[0].rstrip(), match[1].rstrip()) for match in diff_blocks]
+
+    def _parse_skydiscover_full_rewrite(llm_response: str, language: str = "python") -> str:
+        solution_block_pattern = r"```" + language + r"\n(.*?)```"
+        matches = re.findall(solution_block_pattern, llm_response, re.DOTALL)
+        if matches:
+            return matches[0].strip()
+        solution_block_pattern = r"```(.*?)```"
+        matches = re.findall(solution_block_pattern, llm_response, re.DOTALL)
+        if matches:
+            return matches[0].strip()
+        return llm_response
+
 from optpilot.config import (
     LIBRARY_DIR,
     NEGATIVES_DIR,
@@ -43,6 +78,8 @@ if TYPE_CHECKING:
 
 
 _SKILL_AGENT_TRACE_ROOT = LIBRARY_DIR / "skill_agent_traces"
+_GENERATION_RETRY_TIMES = 3
+_FAILED_ATTEMPT_HISTORY = 2
 
 
 # -------------------------------------------------------------------- #
@@ -142,35 +179,45 @@ Fallback format: if a local diff is impossible, output the complete modified
 After the edits, write one short summary line describing the mutation."""
 
 _DIRECT_GEN_USER_PROMPT = """\
+## Current Solution Information
+- Main Metrics:
+{metrics_text}
+- Focus areas: {improvement_areas}
+
+## Program Generation History
+### Previous Attempts
+{history_text}
+
+### Other Context Programs
+{other_context_programs}
+
 ## Current Code
 ```python
 {current_code}
 ```
 
-## Current Performance
+## Current Performance Summary
 {performance_summary}
 
-## Diagnosis: Top Failure — {fm_name} ({fm_rate:.0%} occurrence)
+## Diagnosis: Top Issue — {fm_name} ({fm_rate:.0%} occurrence)
 {fm_description}
 
-Root causes: {root_causes}
+Observed issue patterns: {issue_patterns}
 Affected DAG components: {dag_components}
 Affected agents: {agents}
 
 ## Recommended Repair Direction (from Jacobian experience matrix)
 {recommended_pattern_text}
 
-## Prior Modifications In This Round
-{history_text}
-
-## Failed Approaches — DO NOT repeat these
+## Failed Approaches — compressed
 {negatives_text}
 
-## Candidate Style
-{candidate_style}
+## Recent Failed Candidate Attempts
+{failed_attempts_text}
 
 Fix the diagnosed problem with a local mutation first. Prefer SEARCH/REPLACE
-blocks over full rewrites."""
+blocks over full rewrites. Keep the mutation targeted and preserve original task
+context downstream unless removing a path is clearly necessary."""
 
 _REFLECT_PROMPT = """\
 You are analyzing why a MAS repair attempt failed to resolve **{fm_name}** problems.
@@ -275,17 +322,29 @@ def has_material_change(
     return False
 
 
+def _load_recipe_text(fm_group: str) -> str:
+    """Load recipe text for a FM group from the recipe library."""
+    try:
+        from optpilot.skills.recipes import RecipeLibrary
+        library = RecipeLibrary()
+        return library.format_for_prompt(fm_group, top_k=3)
+    except Exception:
+        return ""
+
+
 def format_negatives(negatives: list[ReflectInsight]) -> str:
     """Format accumulated negative examples for prompt injection."""
     if not negatives:
         return "None yet."
     lines: list[str] = []
-    for i, neg in enumerate(negatives, 1):
+    recent = negatives[-3:]
+    start_index = len(negatives) - len(recent) + 1
+    for offset, neg in enumerate(recent, start_index):
         lines.append(
-            f"Round {i}: tried [{', '.join(neg.changes_attempted[:3])}] "
-            f"→ FM {neg.before_fm_rate:.2f}→{neg.after_fm_rate:.2f}, "
-            f"pass {neg.before_pass_rate:.3f}→{neg.after_pass_rate:.3f}. "
-            f"Failure: {neg.failure_reason}. Lesson: {neg.lesson}"
+            f"- Round {offset}: [{', '.join(neg.changes_attempted[:2])}] "
+            f"FM {neg.before_fm_rate:.2f}→{neg.after_fm_rate:.2f}, "
+            f"pass {neg.before_pass_rate:.3f}→{neg.after_pass_rate:.3f}; "
+            f"failure={neg.failure_reason[:120]}; lesson={neg.lesson[:120]}"
         )
     return "\n".join(lines)
 
@@ -295,9 +354,61 @@ def format_history(history: list[EvolveResult]) -> str:
     if not history:
         return "No prior modifications in this round."
     lines: list[str] = []
-    for i, er in enumerate(history, 1):
-        lines.append(f"Iter {i}: {er.change_description[:200]}")
+    recent = history[-3:]
+    start_index = len(history) - len(recent) + 1
+    for offset, er in enumerate(recent, start_index):
+        lines.append(f"- Iter {offset}: {er.change_description[:160]}")
     return "\n".join(lines)
+
+
+def build_metrics_text(
+    traces: list[MASTrace] | None,
+    profiles: list[FMProfile] | None,
+) -> str:
+    """Build a compact metrics block in the OpenEvolve prompt style."""
+    if not traces or not profiles:
+        return "No evaluation metrics available."
+
+    n = len(traces)
+    correct = sum(1 for t in traces if t.task_score and t.task_score > 0)
+    accuracy = correct / n if n > 0 else 0.0
+    fm_pairs: list[str] = []
+    for gid in GROUP_IDS:
+        rate = fm_rate(gid, profiles)
+        if rate > 0:
+            fm_pairs.append(f"{gid}={rate:.0%}")
+    fm_text = ", ".join(fm_pairs) if fm_pairs else "none"
+    return f"- Accuracy: {accuracy:.1%} ({correct}/{n})\n- FM rates: {fm_text}"
+
+
+def build_improvement_areas(
+    analysis: AnalysisResult,
+    profiles: list[FMProfile] | None,
+) -> str:
+    """Describe concise focus areas for the next repair attempt."""
+    areas: list[str] = []
+    if analysis.common_agents:
+        areas.append(f"stabilize {'/'.join(analysis.common_agents[:3])}")
+    if analysis.metadata.get("dag_components"):
+        areas.append(
+            f"inspect {', '.join(analysis.metadata.get('dag_components', [])[:3])}"
+        )
+    if analysis.common_steps:
+        areas.append(f"tighten step flow around {analysis.common_steps[0]}")
+    if profiles:
+        active = [
+            f"{gid}={fm_rate(gid, profiles):.0%}"
+            for gid in GROUP_IDS
+            if fm_rate(gid, profiles) > 0
+        ]
+        if active:
+            areas.append(f"reduce recurring FM mix ({', '.join(active[:4])})")
+    return "; ".join(areas) if areas else "improve combined score with one targeted repair."
+
+
+def build_other_context_programs() -> str:
+    """Skill mode currently repairs one incumbent DAG at a time."""
+    return "No alternate context programs are tracked in skill mode."
 
 
 def build_synthetic_insight(
@@ -456,25 +567,33 @@ def _extract_change_summary(response: str) -> str:
 
 
 def extract_search_replace_blocks(response: str) -> list[tuple[str, str]]:
-    """Extract exact SEARCH/REPLACE blocks from a model response."""
-    pattern = re.compile(
-        r"<<<<<<< SEARCH\n(.*?)\n=======\n(.*?)\n>>>>>>> REPLACE",
-        re.DOTALL,
-    )
-    return [(search, replace) for search, replace in pattern.findall(response)]
+    """Extract SEARCH/REPLACE blocks using SkyDiscover-compatible parsing."""
+    return _extract_skydiscover_diffs(response)
 
 
 def apply_search_replace_blocks(source: str, blocks: list[tuple[str, str]]) -> str:
-    """Apply exact SEARCH/REPLACE blocks sequentially."""
-    updated = source
-    for search, replace in blocks:
-        matches = updated.count(search)
-        if matches != 1:
-            raise ValueError(
-                f"Expected exactly one match for SEARCH block, found {matches}."
-            )
-        updated = updated.replace(search, replace, 1)
-    return updated
+    """Apply SEARCH/REPLACE blocks using SkyDiscover-compatible semantics."""
+    diff_text = "\n".join(
+        f"<<<<<<< SEARCH\n{search}\n=======\n{replace}\n>>>>>>> REPLACE"
+        for search, replace in blocks
+    )
+    return _apply_skydiscover_diff(source, diff_text)
+
+
+def _format_failed_attempts(failed_attempts: list[dict[str, Any]]) -> str:
+    """Summarize recent failed generation attempts for retry prompts."""
+    if not failed_attempts:
+        return "None."
+
+    lines: list[str] = []
+    for attempt in failed_attempts[-_FAILED_ATTEMPT_HISTORY:]:
+        attempt_no = attempt.get("attempt_number", "?")
+        error = str(attempt.get("error", "Unknown error")).strip()
+        response_preview = str(attempt.get("response_preview", "")).strip()
+        lines.append(f"- Attempt {attempt_no}: {error}")
+        if response_preview:
+            lines.append(f"  Response preview: {response_preview}")
+    return "\n".join(lines)
 
 
 def _response_to_evolve_result(
@@ -496,26 +615,25 @@ def _response_to_evolve_result(
 
     blocks = extract_search_replace_blocks(response)
     if blocks:
-        try:
-            code = apply_search_replace_blocks(current_code, blocks)
-            actions_taken = [f"Applied SEARCH/REPLACE block {i + 1}" for i in range(len(blocks))]
-        except ValueError as e:
+        code = apply_search_replace_blocks(current_code, blocks)
+        actions_taken = [f"Applied SEARCH/REPLACE block {i + 1}" for i in range(len(blocks))]
+        if code == current_code:
             return EvolveResult(
                 dag=current_dag,
                 analysis_text="",
                 modified_source="",
-                change_description=f"Diff mutation failed to apply: {e}",
+                change_description="Diff mutation failed to apply: no changes matched the current code.",
                 actions_taken=[],
                 metadata={
-                    "invalid_evolve_reason": f"Diff apply error: {e}",
+                    "invalid_evolve_reason": "Diff SEARCH blocks did not match current code - no changes applied.",
                     "assigned_pattern_id": recommended_pattern.pattern_id if recommended_pattern else "",
                     "candidate_index": candidate_index,
                     "candidate_style": candidate_style,
                 },
             )
     else:
-        code = extract_python_code(response)
-        if not code:
+        code = _parse_skydiscover_full_rewrite(response, language="python")
+        if "def build_dag" not in code:
             return EvolveResult(
                 dag=current_dag,
                 analysis_text="",
@@ -623,13 +741,16 @@ async def agenerate_evolve_candidates(
             f"Prioritize this approach, but adapt based on the diagnosis."
         )
 
-    candidate_styles = [
-        "Mutate the routing topology with the smallest possible edge-level edit.",
-        "Mutate prompts and control conditions conservatively; avoid adding new nodes unless necessary.",
-        "Target context preservation explicitly; prefer edits that retain the original task prompt downstream.",
-        "Target loop-breaking or verification hardening with one compact structural change.",
-    ]
+    # Inject repair recipes from offline experience
+    recipe_text = _load_recipe_text(fm_group)
+    if recipe_text:
+        recommended_pattern_text += "\n\n" + recipe_text
+
     history_text = format_history(history)
+    negatives_text = format_negatives(negatives)
+    metrics_text = build_metrics_text(traces, profiles)
+    improvement_areas = build_improvement_areas(analysis, profiles)
+    other_context_programs = build_other_context_programs()
     assigned_patterns: list[Any | None]
     if recommended_patterns is not None:
         assigned_patterns = list(recommended_patterns)
@@ -639,7 +760,6 @@ async def agenerate_evolve_candidates(
         assigned_patterns = [None]
 
     async def _generate_one(candidate_index: int, candidate_pattern: Any | None) -> EvolveResult:
-        candidate_style = candidate_styles[candidate_index % len(candidate_styles)]
         pattern_text = recommended_pattern_text
         if candidate_pattern is None:
             pattern_text = (
@@ -653,41 +773,73 @@ async def agenerate_evolve_candidates(
                 f"This repair direction has been effective for similar failures. "
                 f"Prioritize this approach, but adapt based on the diagnosis."
             )
-        user_prompt = _DIRECT_GEN_USER_PROMPT.format(
-            current_code=current_code,
-            performance_summary=performance_summary,
-            fm_name=fm_info["name"],
-            fm_rate=analysis.fm_rate,
-            fm_description=fm_info["description"],
-            root_causes=", ".join(analysis.root_cause_clusters) or "unknown",
-            dag_components=", ".join(analysis.metadata.get("dag_components", [])) or "unknown",
-            agents=", ".join(analysis.common_agents) or "unknown",
-            recommended_pattern_text=pattern_text,
-            history_text=history_text,
-            negatives_text=format_negatives(negatives),
-            candidate_style=f"Candidate {candidate_index + 1}: {candidate_style}",
-        )
-        messages = [
-            {"role": "system", "content": _DIRECT_GEN_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
-        response = await acall_llm(
-            messages=messages,
-            max_tokens=SKILL_EVOLVE_MAX_TOKENS,
-            temperature=min(0.75, 0.35 + 0.1 * candidate_index),
-        )
-        return _response_to_evolve_result(
-            response=response,
-            current_dag=dag,
-            current_code=current_code,
-            fm_group=fm_group,
-            analysis=analysis,
-            negatives=negatives,
-            prompt=user_prompt,
-            recommended_pattern=candidate_pattern,
-            candidate_index=candidate_index,
-            candidate_style=candidate_style,
-        )
+        failed_attempts: list[dict[str, Any]] = []
+        last_candidate: EvolveResult | None = None
+
+        for attempt_index in range(_GENERATION_RETRY_TIMES):
+            user_prompt = _DIRECT_GEN_USER_PROMPT.format(
+                current_code=current_code,
+                metrics_text=metrics_text,
+                improvement_areas=improvement_areas,
+                other_context_programs=other_context_programs,
+                performance_summary=performance_summary,
+                fm_name=fm_info["name"],
+                fm_rate=analysis.fm_rate,
+                fm_description=fm_info["description"],
+                issue_patterns=", ".join(analysis.root_cause_clusters) or "unknown",
+                dag_components=", ".join(analysis.metadata.get("dag_components", [])) or "unknown",
+                agents=", ".join(analysis.common_agents) or "unknown",
+                recommended_pattern_text=pattern_text,
+                history_text=history_text,
+                negatives_text=negatives_text,
+                failed_attempts_text=_format_failed_attempts(failed_attempts),
+            )
+            messages = [
+                {"role": "system", "content": _DIRECT_GEN_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
+            response = await acall_llm(
+                messages=messages,
+                max_tokens=SKILL_EVOLVE_MAX_TOKENS,
+                temperature=min(0.75, 0.35 + 0.1 * candidate_index),
+            )
+            candidate = _response_to_evolve_result(
+                response=response,
+                current_dag=dag,
+                current_code=current_code,
+                fm_group=fm_group,
+                analysis=analysis,
+                negatives=negatives,
+                prompt=user_prompt,
+                recommended_pattern=candidate_pattern,
+                candidate_index=candidate_index,
+                candidate_style="",
+            )
+            last_candidate = candidate
+
+            invalid_reason = str(candidate.metadata.get("invalid_evolve_reason", "")).strip()
+            no_material_change = (
+                not invalid_reason and not has_material_change(dag, candidate.dag, candidate)
+            )
+            if not invalid_reason and not no_material_change:
+                candidate.metadata["attempts_used"] = attempt_index + 1
+                if failed_attempts:
+                    candidate.metadata["failed_attempts"] = list(failed_attempts)
+                return candidate
+
+            error = invalid_reason or "No concrete DAG change was applied."
+            failed_attempts.append({
+                "attempt_number": attempt_index + 1,
+                "error": error,
+                "response_preview": re.sub(r"\s+", " ", response).strip()[:300],
+            })
+
+        assert last_candidate is not None
+        if not last_candidate.metadata.get("invalid_evolve_reason", ""):
+            last_candidate.metadata["invalid_evolve_reason"] = "No concrete DAG change was applied."
+        last_candidate.metadata["attempts_used"] = _GENERATION_RETRY_TIMES
+        last_candidate.metadata["failed_attempts"] = list(failed_attempts)
+        return last_candidate
 
     raw_candidates = await asyncio.gather(
         *[

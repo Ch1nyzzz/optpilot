@@ -1,0 +1,35 @@
+[
+  {
+    "recipe_id": "C_topology_change_0",
+    "fm_group": "C",
+    "change_type": "topology_change",
+    "precondition": "The system exhibits context loss because downstream agents (e.g., Solver and Executor) can produce conflicting or inconsistent results, leading to verification failures, extra text in the final answer, or instruction non‑compliance.",
+    "action": "Insert a dedicated consistency‑checking agent (e.g., **Checker**). 1️⃣ Define a clear system prompt for the Checker that requires it to output only a single token such as `CONSISTENT` or `INCONSISTENT`. 2️⃣ Add edges that route the Solver output and the Executor output to the Checker (trigger = true, carry_data = true). 3️⃣ Add an edge that routes the Checker’s consistency flag to the Verifier (trigger = true, carry_data = true). 4️⃣ Refine the Verifier prompt to expect the flag and to forbid any extra text beyond the required `SOLUTION_FOUND` line. 5️⃣ Update any introductory or documentation literals to mention the new Checker step. 6️⃣ Ensure edge triggers are set correctly (non‑triggering edges only where data should flow passively).",
+    "root_cause": "Missing explicit validation of parallel agent outputs, causing the system to lose context about whether the generated solution satisfies the original problem constraints.",
+    "n_effective": 3,
+    "avg_test_delta": 0.06666666666666665,
+    "example_diffs": []
+  },
+  {
+    "recipe_id": "C_topology_change_1",
+    "fm_group": "C",
+    "change_type": "topology_change",
+    "precondition": "The workflow DAG contains multiple coordination agents (e.g., Planner, Validator, Checker) whose sole purpose is routing or minor validation, and the system shows symptoms of instruction non‑compliance, loops, or unnecessary communication overhead.",
+    "action": "Simplify the DAG by removing redundant coordination agents. 1️⃣ Delete the Planner, Validator, and/or Checker nodes that do not add essential reasoning. 2️⃣ Remove all edges incident to those nodes. 3️⃣ Create direct edges from the source (e.g., Introduction) to the primary reasoning agent (e.g., Problem_Solver) and from that agent to the final Verifier, setting `trigger=true` where immediate processing is needed. 4️⃣ Adjust edge triggers that changed due to node removal (e.g., make USER→Problem_Solver triggered). 5️⃣ Lower the temperature (e.g., to 0.0 or 0.05) for deterministic behavior in the remaining agents. 6️⃣ Update introductory text and any workflow descriptions to reflect the new, streamlined three‑step process.",
+    "root_cause": "Over‑engineered DAG introduces extra hops and trigger mis‑configurations, which fragment context and increase the chance of communication failures.",
+    "n_effective": 3,
+    "avg_test_delta": 0.06666666666666665,
+    "example_diffs": []
+  },
+  {
+    "recipe_id": "C_edge_route_0",
+    "fm_group": "C",
+    "change_type": "edge_route",
+    "precondition": "After a mutation that adds, removes, or rewires edges, the system exhibits verification or communication failures (e.g., the Verifier receives no input, or downstream nodes report missing data).",
+    "action": "1. Scan the DAG for any edge that references a node not present in the node list; add the missing node definition (e.g., a Filter node) with appropriate default configuration. 2. Ensure that any critical path (such as Problem_Solver → Verifier) remains intact: if the direct edge is removed, explicitly add an intermediate node (e.g., Agent_Filter) and then create edges Problem_Solver → Agent_Filter and Agent_Filter → Verifier, guaranteeing that the data flow to the Verifier is preserved. 3. Validate the updated graph by running a sanity check that every node reachable from the entry point can reach the Verifier and that no node is isolated.",
+    "root_cause": "Context loss caused by broken data routing: edges were changed without adding the referenced intermediate node or without preserving the essential verification path, leading to missing inputs and failed verification.",
+    "n_effective": 1,
+    "avg_test_delta": 0.010000000000000009,
+    "example_diffs": []
+  }
+]

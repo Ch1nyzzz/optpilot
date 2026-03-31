@@ -14,6 +14,7 @@ from typing import Any
 
 from optpilot.config import LIBRARY_DIR
 from optpilot.config import (
+    FAILURE_EXAMPLE_TARGET,
     JACOBIAN_TOP_K_PATTERNS,
     ONLINE_EVAL_RANDOM_SEED,
     SHADOW_EVAL_INTERVAL,
@@ -50,14 +51,12 @@ from optpilot.tracking import Tracker
 def rank_fm_groups(
     profiles: list[FMProfile],
     target_fm: str | None = None,
-    min_support: int = 2,
+    min_support: int = 1,
 ) -> list[tuple[str, int]]:
-    """Rank FM groups by primary failure frequency (descending)."""
+    """Rank FM groups by active issue frequency (descending)."""
     fm_counts: Counter[str] = Counter()
     for p in profiles:
-        fm_id = p.primary_failure_id()
-        if fm_id:
-            fm_counts[fm_id] += 1
+        fm_counts.update(p.active_fm_ids())
 
     if target_fm:
         count = fm_counts.get(target_fm, 0)
@@ -167,6 +166,16 @@ def _save_dag_if_possible(dag: object, path: str | Path) -> str:
     return ""
 
 
+def _trace_failed(trace: MASTrace) -> bool:
+    score = getattr(trace, "task_score", None)
+    if score is not None:
+        return float(score) <= 0.0
+    success = getattr(trace, "task_success", None)
+    if success is not None:
+        return not bool(success)
+    return True
+
+
 def _trace_to_dict(trace) -> dict[str, object]:
     return {
         "trace_id": trace.trace_id,
@@ -185,7 +194,6 @@ def _profile_to_dict(profile: FMProfile) -> dict[str, object]:
     return {
         "trace_id": profile.trace_id,
         "active_fm_ids": profile.active_fm_ids(),
-        "primary_fm_id": profile.primary_failure_id(),
         "labels": {
             fm_id: {
                 "fm_name": label.fm_name,
@@ -195,17 +203,6 @@ def _profile_to_dict(profile: FMProfile) -> dict[str, object]:
             }
             for fm_id, label in profile.labels.items()
         },
-        "primary_localization": (
-            {
-                "agent": profile.primary_localization.agent,
-                "step": profile.primary_localization.step,
-                "context": profile.primary_localization.context,
-                "root_cause": profile.primary_localization.root_cause,
-                "dag_component": profile.primary_localization.dag_component,
-            }
-            if profile.primary_localization is not None
-            else None
-        ),
         "localization": {
             fm_id: {
                 "agent": loc.agent,
@@ -220,10 +217,7 @@ def _profile_to_dict(profile: FMProfile) -> dict[str, object]:
 
 
 def _profile_from_dict(data: dict[str, object]) -> FMProfile:
-    profile = FMProfile(
-        trace_id=int(data["trace_id"]),
-        primary_fm_id=str(data.get("primary_fm_id", "")),
-    )
+    profile = FMProfile(trace_id=int(data["trace_id"]))
 
     labels = data.get("labels", {})
     if isinstance(labels, dict):
@@ -236,6 +230,14 @@ def _profile_from_dict(data: dict[str, object]) -> FMProfile:
                 category=str(raw.get("category", "")),
                 present=bool(raw.get("present", False)),
                 confidence=float(raw.get("confidence", 1.0)),
+            )
+    elif isinstance(data.get("active_fm_ids"), list):
+        for fm_id in data["active_fm_ids"]:
+            profile.labels[str(fm_id)] = FMLabel(
+                fm_id=str(fm_id),
+                fm_name=str(fm_id),
+                category=str(fm_id),
+                present=True,
             )
 
     localization = data.get("localization", {})
@@ -250,18 +252,6 @@ def _profile_from_dict(data: dict[str, object]) -> FMProfile:
                 root_cause=str(raw.get("root_cause", "")),
                 dag_component=str(raw.get("dag_component", "other")),
             )
-
-    primary_localization = data.get("primary_localization")
-    if isinstance(primary_localization, dict):
-        profile.primary_localization = FMLocalization(
-            agent=str(primary_localization.get("agent", "")),
-            step=str(primary_localization.get("step", "")),
-            context=str(primary_localization.get("context", "")),
-            root_cause=str(primary_localization.get("root_cause", "")),
-            dag_component=str(primary_localization.get("dag_component", "other")),
-        )
-    elif profile.primary_fm_id and profile.primary_fm_id in profile.localization:
-        profile.primary_localization = profile.localization[profile.primary_fm_id]
 
     return profile
 
@@ -336,10 +326,14 @@ class Orchestrator:
 
         results: list[dict] = []
         dag_versions: list[dict[str, str | int]] = []
+        seeded_failure_tasks: list[str] | None = None
         if dag_output_base:
             initial_path = _save_dag_if_possible(current_dag, Path(dag_output_base) / "initial.yaml")
             if initial_path:
                 dag_versions.append({"stage": "initial", "path": initial_path})
+
+        # Track successfully applied patterns for diminishing-returns decay
+        session_applied_patterns: set[str] = set()
 
         for round_i in range(max_rounds):
             print(f"=== Round {round_i + 1}/{max_rounds} ===")
@@ -353,12 +347,43 @@ class Orchestrator:
                 if dag_output_base else None
             )
 
-            active_tasks = _sample_balanced_tasks(
-                self.runner,
-                tasks,
-                eval_tasks_per_round,
-                seed=ONLINE_EVAL_RANDOM_SEED + round_i,
-            )
+            if round_i == 0 and eval_tasks_per_round:
+                (
+                    seeded_failure_tasks,
+                    incumbent_traces,
+                    incumbent_profiles,
+                ) = await self._collect_failure_examples(
+                    tasks=tasks,
+                    dag=current_dag,
+                    concurrency=concurrency,
+                    seed=ONLINE_EVAL_RANDOM_SEED,
+                    target_failures=FAILURE_EXAMPLE_TARGET,
+                    batch_size=eval_tasks_per_round,
+                    budget=budget,
+                )
+                active_tasks = list(seeded_failure_tasks)
+                print(f"  Seeded failure set: {len(active_tasks)} task(s)")
+            else:
+                active_tasks = (
+                    list(seeded_failure_tasks)
+                    if seeded_failure_tasks
+                    else _sample_balanced_tasks(
+                        self.runner,
+                        tasks,
+                        eval_tasks_per_round,
+                        seed=ONLINE_EVAL_RANDOM_SEED + round_i,
+                    )
+                )
+
+                incumbent_traces = await self.runner.arun_batch(
+                    active_tasks,
+                    dag=current_dag,
+                    output_base=None,
+                    max_concurrency=concurrency,
+                )
+                incumbent_profiles = await self.diagnoser.aclassify_batch(incumbent_traces)
+                budget.used_batch_runs += 1
+
             active_counts = Counter(
                 _resolve_task_benchmark_name(self.runner, task) for task in active_tasks
             )
@@ -367,19 +392,11 @@ class Orchestrator:
                 + ", ".join(f"{bench}={count}" for bench, count in sorted(active_counts.items()))
             )
 
-            incumbent_traces = await self.runner.arun_batch(
-                active_tasks,
-                dag=current_dag,
-                output_base=None,
-                max_concurrency=concurrency,
-            )
-            incumbent_profiles = await self.diagnoser.aclassify_batch(incumbent_traces)
             incumbent_score = fitness_score(
                 incumbent_traces,
                 incumbent_profiles,
                 len(current_dag.agent_nodes),
             )
-            budget.used_batch_runs += 1
             print(f"  Incumbent active fitness: {incumbent_score:.4f}")
 
             # 1. Extract dominant failure from the cached incumbent eval.
@@ -408,7 +425,11 @@ class Orchestrator:
                 top_k_patterns = max(
                     0, min(JACOBIAN_TOP_K_PATTERNS, SKILL_EVOLVE_NUM_CANDIDATES - 1)
                 )
-            recommended = self.jacobian.recommend(dom_sig, top_k=top_k_patterns)
+            recommended = self.jacobian.recommend(
+                dom_sig,
+                top_k=top_k_patterns,
+                applied_patterns=session_applied_patterns,
+            )
             recommended_patterns = [pattern for pattern, _ in recommended]
             exploratory_slots = (
                 0
@@ -428,6 +449,8 @@ class Orchestrator:
                     "  Jacobian recommendations: "
                     + ", ".join(f"{p.name} ({p.pattern_id})" for p in recommended_patterns)
                 )
+            if session_applied_patterns:
+                print(f"  Applied patterns (decayed): {session_applied_patterns}")
             if exploratory_slots:
                 print(f"  Exploratory candidates: {exploratory_slots}")
 
@@ -628,6 +651,12 @@ class Orchestrator:
                 current_dag = best_candidate.dag
                 self.dag = current_dag
                 self.evolver.reset_failures(top_fm)
+                # Track applied pattern for diminishing-returns decay
+                observed = str(best_candidate.metadata.get("observed_pattern_id", ""))
+                if observed:
+                    session_applied_patterns.add(observed)
+                elif pattern:
+                    session_applied_patterns.add(pattern.pattern_id)
                 print(f"  [3/3] IMPROVED — adopting new DAG.")
 
                 if round_dag_dir:
@@ -947,6 +976,74 @@ class Orchestrator:
     #  Helpers                                                          #
     # ---------------------------------------------------------------- #
 
+    async def _collect_failure_examples(
+        self,
+        *,
+        tasks: list[str],
+        dag: MASDAG,
+        concurrency: int,
+        seed: int,
+        target_failures: int,
+        batch_size: int,
+        budget: SkillBudget,
+    ) -> tuple[list[str], list[MASTrace], list[FMProfile]]:
+        """Scan task batches until enough failed examples are accumulated."""
+        seen_tasks: set[str] = set()
+        failed_tasks: list[str] = []
+        failed_traces: list[MASTrace] = []
+        attempt = 0
+
+        while len(seen_tasks) < len(tasks) and len(failed_tasks) < target_failures:
+            batch = _sample_balanced_tasks(
+                self.runner,
+                tasks,
+                batch_size,
+                seed=seed + attempt,
+                exclude=seen_tasks,
+            )
+            if not batch:
+                break
+
+            seen_tasks.update(batch)
+            batch_traces = await self.runner.arun_batch(
+                batch,
+                dag=dag,
+                output_base=None,
+                max_concurrency=concurrency,
+            )
+            budget.used_batch_runs += 1
+
+            for task, trace in zip(batch, batch_traces, strict=False):
+                if _trace_failed(trace):
+                    failed_tasks.append(task)
+                    failed_traces.append(trace)
+                    if len(failed_tasks) >= target_failures:
+                        break
+            attempt += 1
+
+        if not failed_tasks:
+            fallback_tasks = _sample_balanced_tasks(
+                self.runner,
+                tasks,
+                batch_size,
+                seed=seed,
+            )
+            failed_tasks = list(fallback_tasks)
+            failed_traces = await self.runner.arun_batch(
+                fallback_tasks,
+                dag=dag,
+                output_base=None,
+                max_concurrency=concurrency,
+            )
+            budget.used_batch_runs += 1
+            seen_tasks.update(fallback_tasks)
+
+        failed_profiles = await self.diagnoser.aclassify_batch(failed_traces)
+        print(
+            f"  Collected {len(failed_tasks)} failed example(s) from {len(seen_tasks)} scanned task(s)"
+        )
+        return failed_tasks, failed_traces, failed_profiles
+
     async def _collect_shadow_rejection_metadata(
         self,
         *,
@@ -977,14 +1074,15 @@ class Orchestrator:
             selected.extend(candidate_failures[: max_diagnostics - len(selected)])
 
         traces_to_diagnose = [trace for _, trace, _ in selected]
-        if traces_to_diagnose and hasattr(self.diagnoser, "adiagnose_batch"):
+        if traces_to_diagnose and hasattr(self.diagnoser, "aclassify_batch"):
+            diagnosed_profiles = await self.diagnoser.aclassify_batch(traces_to_diagnose)
+        elif traces_to_diagnose and hasattr(self.diagnoser, "adiagnose_batch"):
             diagnosed_profiles = await self.diagnoser.adiagnose_batch(traces_to_diagnose)
         else:
             diagnosed_profiles = [FMProfile(trace_id=getattr(trace, "trace_id", i)) for i, trace in enumerate(traces_to_diagnose)]
 
         diagnostics: list[dict[str, Any]] = []
         for (task, trace, is_regression), profile in zip(selected, diagnosed_profiles):
-            loc = profile.primary_localization
             diagnostics.append({
                 "task": task,
                 "task_key": str(getattr(trace, "task_key", "")),
@@ -993,11 +1091,7 @@ class Orchestrator:
                 "is_regression": is_regression,
                 "candidate_success": bool(getattr(trace, "task_success", False)),
                 "candidate_score": getattr(trace, "task_score", None),
-                "primary_fm_id": profile.primary_failure_id(),
-                "root_cause": loc.root_cause if loc else "",
-                "agent": loc.agent if loc else "",
-                "dag_component": loc.dag_component if loc else "",
-                "context": loc.context if loc else "",
+                "active_fm_ids": profile.active_fm_ids(),
             })
 
         return {

@@ -109,6 +109,12 @@ def evaluate_condition(condition: str | dict, text: str) -> bool:
 # Signature: (system_prompt, user_message, model, **config) -> response_text
 LLMCallFn = Callable[..., str]
 AsyncLLMCallFn = Callable[..., Coroutine[Any, Any, str]]
+EMPTY_INPUT_ERROR_PREFIX = "ERROR_EMPTY_INPUT:"
+
+
+# Type alias for tool executors: name -> callable(args_dict) -> result_str
+ToolExecutorFn = Callable[[dict[str, Any]], str]
+AsyncToolExecutorFn = Callable[[dict[str, Any]], Coroutine[Any, Any, str]]
 
 
 class DAGExecutor:
@@ -121,6 +127,10 @@ class DAGExecutor:
         model: Default model name for agent nodes.
         max_global_steps: Safety limit on total node executions.
         timeout: Overall execution timeout in seconds.
+        tool_registry: Map of tool_name → (schema_dict, sync_executor_fn).
+            Agent nodes declare tools via ``config.tools`` (list of tool names).
+            When present, the agent runs a tool-calling loop.
+        async_tool_registry: Async version of tool_registry.
     """
 
     def __init__(
@@ -131,6 +141,8 @@ class DAGExecutor:
         max_global_steps: int = 200,
         timeout: int = 600,
         async_llm_fn: AsyncLLMCallFn | None = None,
+        tool_registry: dict[str, tuple[dict, ToolExecutorFn]] | None = None,
+        async_tool_registry: dict[str, tuple[dict, AsyncToolExecutorFn]] | None = None,
     ):
         self.dag = dag
         self.llm_fn = llm_fn
@@ -138,6 +150,8 @@ class DAGExecutor:
         self.model = model
         self.max_global_steps = max_global_steps
         self.timeout = timeout
+        self.tool_registry = tool_registry or {}
+        self.async_tool_registry = async_tool_registry or {}
 
         # Build adjacency: source -> list of edges
         self._outgoing: dict[str, list[DAGEdge]] = defaultdict(list)
@@ -316,6 +330,9 @@ class DAGExecutor:
 
     def _execute_agent(self, node: DAGNode, input_text: str) -> str:
         """Execute an agent node via LLM call."""
+        if not input_text.strip():
+            return self._empty_input_output(node)
+
         messages = []
         system_prompt = node.prompt or node.role
         if system_prompt:
@@ -334,6 +351,13 @@ class DAGExecutor:
                 kwargs[key] = params[key]
 
         return self.llm_fn(messages, model=model, **kwargs)
+
+    def _empty_input_output(self, node: DAGNode) -> str:
+        """Return a structured marker for skipped empty-input agent calls."""
+        return (
+            f"{EMPTY_INPUT_ERROR_PREFIX} skipped LLM call for {node.node_id} "
+            "because the combined input was empty."
+        )
 
     def _get_loop_edges(self, loop_node_id: str) -> tuple[list[DAGEdge], list[DAGEdge]]:
         """Split loop-counter outgoing trigger edges into continue vs exit paths.
@@ -532,8 +556,16 @@ class DAGExecutor:
             return input_text
 
     async def _aexecute_agent(self, node: DAGNode, input_text: str) -> str:
-        """Async version of _execute_agent."""
-        messages = []
+        """Async version of _execute_agent.
+
+        If the node declares ``config.tools`` (list of tool names), runs a
+        tool-calling loop: LLM may request tool calls, executor runs them,
+        feeds results back, repeats until LLM produces a final text response.
+        """
+        if not input_text.strip():
+            return self._empty_input_output(node)
+
+        messages: list[dict[str, Any]] = []
         system_prompt = node.prompt or node.role
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -549,4 +581,71 @@ class DAGExecutor:
             elif key in params:
                 kwargs[key] = params[key]
 
+        # Check if this agent has tools
+        tool_names = node.config.get("tools", [])
+        if not tool_names or not self.async_tool_registry:
+            return await self.async_llm_fn(messages, model=model, **kwargs)
+
+        # Build tool schemas for this agent
+        tools = []
+        executors: dict[str, AsyncToolExecutorFn] = {}
+        for name in tool_names:
+            if name in self.async_tool_registry:
+                schema, executor = self.async_tool_registry[name]
+                tools.append(schema)
+                executors[name] = executor
+
+        if not tools:
+            return await self.async_llm_fn(messages, model=model, **kwargs)
+
+        # Tool-calling loop
+        max_tool_rounds = node.config.get("max_tool_rounds", 5)
+        for _ in range(max_tool_rounds):
+            response = await self.async_llm_fn(
+                messages, model=model, tools=tools, **kwargs,
+            )
+
+            # If response is plain text (no tool call), we're done
+            if isinstance(response, str):
+                return response
+
+            # Response is a tool call result from the LLM
+            # Expected format: list of {tool_name, arguments, id}
+            if isinstance(response, dict) and response.get("tool_calls"):
+                tool_results = []
+                for tc in response["tool_calls"]:
+                    fn_name = tc.get("function", {}).get("name", "")
+                    fn_args = tc.get("function", {}).get("arguments", {})
+                    tc_id = tc.get("id", "")
+                    if isinstance(fn_args, str):
+                        import json as _json
+                        try:
+                            fn_args = _json.loads(fn_args)
+                        except _json.JSONDecodeError:
+                            fn_args = {}
+
+                    if fn_name in executors:
+                        try:
+                            result = await executors[fn_name](fn_args)
+                        except Exception as e:
+                            result = f"Tool error: {e}"
+                    else:
+                        result = f"Unknown tool: {fn_name}"
+
+                    tool_results.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": str(result),
+                    })
+
+                # Add assistant message with tool calls + tool results
+                messages.append({"role": "assistant", "tool_calls": response["tool_calls"]})
+                messages.extend(tool_results)
+                continue
+
+            # Fallback: treat as text
+            return str(response)
+
+        # Exhausted tool rounds — ask for final text
+        messages.append({"role": "user", "content": "Please provide your final answer now."})
         return await self.async_llm_fn(messages, model=model, **kwargs)

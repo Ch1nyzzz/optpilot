@@ -371,8 +371,14 @@ async def acall_llm(
     temperature: float = 0.2,
     max_tokens: int = 16384,
     max_retries: int = 8,
-) -> str:
-    """Async Together AI call with model-family concurrency and RPM limits."""
+    tools: list[dict] | None = None,
+) -> str | dict:
+    """Async Together AI call with model-family concurrency and RPM limits.
+
+    When ``tools`` is provided and the model returns tool calls, returns a
+    dict with ``tool_calls`` key instead of a plain string.  The caller
+    (e.g. DAGExecutor) is responsible for executing tools and continuing.
+    """
     client = get_async_client()
     kwargs: dict[str, Any] = {
         "model": model,
@@ -380,12 +386,31 @@ async def acall_llm(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    if tools:
+        kwargs["tools"] = tools
 
     for attempt in range(max_retries):
         try:
             async with get_async_rate_limiter(model):
                 resp = await client.chat.completions.create(**kwargs)
-            content = resp.choices[0].message.content or ""
+            msg = resp.choices[0].message
+
+            # Check for tool calls
+            if tools and msg.tool_calls:
+                return {
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in msg.tool_calls
+                    ]
+                }
+
+            content = msg.content or ""
             if not content and resp.choices[0].finish_reason == "length":
                 if attempt < max_retries - 1:
                     kwargs["max_tokens"] = min(kwargs["max_tokens"] * 2, 65536)

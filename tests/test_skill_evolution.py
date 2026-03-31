@@ -23,6 +23,7 @@ from optpilot.skills.repair_loop import (
     apply_search_replace_blocks,
     aevolve,
     build_performance_summary,
+    dag_to_python,
     extract_search_replace_blocks,
     extract_python_code,
 )
@@ -131,7 +132,7 @@ def test_infer_observed_pattern_from_dags_detects_carry_data_change():
         metadata={"start": ["start"]},
     )
 
-    assert infer_observed_pattern_from_dags(original, repaired) == "edge_fix_carry_data"
+    assert infer_observed_pattern_from_dags(original, repaired) == "edge_route"
 
 
 def test_jacobian_skips_positive_credit_when_observed_unknown(tmp_path):
@@ -217,10 +218,7 @@ def test_catalog_evolver_calls_llm_and_saves(monkeypatch, tmp_path):
                         {
                             "benchmark": "MMLU",
                             "task_key": "What is the Lotus principle?",
-                            "primary_fm_id": "B",
-                            "dag_component": "agent_prompt",
-                            "agent": "Agent_Verifier",
-                            "root_cause": "Verifier-focused changes overfit active tasks and caused brittle shadow behavior.",
+                            "active_fm_ids": ["B", "F"],
                         }
                     ],
                 }
@@ -236,7 +234,7 @@ def test_catalog_evolver_calls_llm_and_saves(monkeypatch, tmp_path):
         captured["max_tokens"] = max_tokens
         captured["max_turns"] = max_turns
         diagnosis_bundle = tool_executor("bash", {"command": "cat diagnosis_bundle.md"})
-        assert "Verifier-focused changes overfit active tasks" in diagnosis_bundle
+        assert "issues=B,F" in diagnosis_bundle
         # Add a new pattern
         result = tool_executor("add_pattern", {
             "pattern_id": "loop_add_explicit_exit",
@@ -390,6 +388,149 @@ def build_dag():
     assert "Pattern 2" in seen_prompts[1]
     assert "Pattern 3" in seen_prompts[2]
     assert "No specific recommendation for this candidate" in seen_prompts[3]
+
+
+@pytest.mark.anyio
+async def test_agenerate_evolve_candidates_retries_invalid_diff(monkeypatch, tmp_path):
+    invalid_diff = """\
+<<<<<<< SEARCH
+temperature: 9.9
+=======
+temperature: 0.1
+>>>>>>> REPLACE
+"""
+    repaired_code = '''\
+def build_dag():
+    return {
+        "dag_id": "test",
+        "nodes": [
+            {"id": "start", "type": "literal", "config": {"content": "ok"}},
+            {"id": "Agent_Verifier", "type": "agent", "role": "verify", "config": {"params": {"temperature": 0.1}}},
+            {"id": "FINAL", "type": "passthrough", "config": {}},
+        ],
+        "edges": [
+            {"from": "start", "to": "Agent_Verifier", "trigger": True, "condition": "true", "carry_data": True},
+            {"from": "Agent_Verifier", "to": "FINAL", "trigger": True, "condition": "true", "carry_data": True},
+        ],
+        "metadata": {"start": ["start"], "success_nodes": ["FINAL"]},
+    }
+'''
+    prompts: list[str] = []
+    responses = [
+        invalid_diff,
+        f"```python\n{repaired_code}\n```\nRetry with full rewrite.",
+    ]
+
+    async def fake_acall_llm(messages, max_tokens, temperature):
+        prompts.append(messages[-1]["content"])
+        return responses[len(prompts) - 1]
+
+    monkeypatch.setattr("optpilot.skills.repair_loop.acall_llm", fake_acall_llm)
+    monkeypatch.setattr("optpilot.skills.repair_loop._SKILL_AGENT_TRACE_ROOT", tmp_path / "traces")
+
+    dag = MASDAG(
+        dag_id="test",
+        nodes={
+            "start": DAGNode(node_id="start", node_type="literal", prompt="begin"),
+            "Agent_Verifier": DAGNode(node_id="Agent_Verifier", node_type="agent", prompt="verify"),
+            "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+        },
+        edges=[
+            DAGEdge(source="start", target="Agent_Verifier"),
+            DAGEdge(source="Agent_Verifier", target="FINAL"),
+        ],
+        metadata={"start": ["start"]},
+    )
+    analysis = AnalysisResult(
+        fm_id="F", fm_rate=0.5,
+        common_agents=["Agent_Verifier"],
+        common_steps=["verification"],
+        root_cause_clusters=["missing input context"],
+        metadata={"dag_components": ["edge_missing"]},
+    )
+
+    candidates = await agenerate_evolve_candidates(
+        dag,
+        "F",
+        analysis,
+        negatives=[],
+        history=[],
+        num_candidates=1,
+    )
+
+    assert len(prompts) == 2
+    assert "Recent Failed Candidate Attempts" in prompts[1]
+    assert "Diff SEARCH blocks did not match current code" in prompts[1]
+    assert candidates[0].metadata.get("invalid_evolve_reason", "") == ""
+    assert candidates[0].metadata["attempts_used"] == 2
+
+
+@pytest.mark.anyio
+async def test_agenerate_evolve_candidates_retries_no_material_change(monkeypatch, tmp_path):
+    repaired_code = '''\
+def build_dag():
+    return {
+        "dag_id": "test",
+        "nodes": [
+            {"id": "start", "type": "literal", "config": {"content": "patched"}},
+            {"id": "Agent_Verifier", "type": "agent", "role": "verify", "config": {"params": {"temperature": 0.2}}},
+            {"id": "FINAL", "type": "passthrough", "config": {}},
+        ],
+        "edges": [
+            {"from": "start", "to": "Agent_Verifier", "trigger": True, "condition": "true", "carry_data": True},
+            {"from": "Agent_Verifier", "to": "FINAL", "trigger": True, "condition": "true", "carry_data": True},
+        ],
+        "metadata": {"start": ["start"], "success_nodes": ["FINAL"]},
+    }
+'''
+    dag = MASDAG(
+        dag_id="test",
+        nodes={
+            "start": DAGNode(node_id="start", node_type="literal", prompt="begin"),
+            "Agent_Verifier": DAGNode(node_id="Agent_Verifier", node_type="agent", prompt="verify"),
+            "FINAL": DAGNode(node_id="FINAL", node_type="passthrough"),
+        },
+        edges=[
+            DAGEdge(source="start", target="Agent_Verifier"),
+            DAGEdge(source="Agent_Verifier", target="FINAL"),
+        ],
+        metadata={"start": ["start"], "success_nodes": ["FINAL"]},
+    )
+    current_code = dag_to_python(dag)
+    prompts: list[str] = []
+    responses = [
+        f"```python\n{current_code}\n```\nNo-op candidate.",
+        f"```python\n{repaired_code}\n```\nReal change.",
+    ]
+
+    async def fake_acall_llm(messages, max_tokens, temperature):
+        prompts.append(messages[-1]["content"])
+        return responses[len(prompts) - 1]
+
+    monkeypatch.setattr("optpilot.skills.repair_loop.acall_llm", fake_acall_llm)
+    monkeypatch.setattr("optpilot.skills.repair_loop._SKILL_AGENT_TRACE_ROOT", tmp_path / "traces")
+
+    analysis = AnalysisResult(
+        fm_id="F", fm_rate=0.5,
+        common_agents=["Agent_Verifier"],
+        common_steps=["verification"],
+        root_cause_clusters=["insufficient constraint"],
+        metadata={"dag_components": ["node_config"]},
+    )
+
+    candidates = await agenerate_evolve_candidates(
+        dag,
+        "F",
+        analysis,
+        negatives=[],
+        history=[],
+        num_candidates=1,
+    )
+
+    assert len(prompts) == 2
+    assert "No concrete DAG change was applied." in prompts[1]
+    assert candidates[0].metadata.get("invalid_evolve_reason", "") == ""
+    assert candidates[0].metadata["attempts_used"] == 2
 
 
 @pytest.mark.anyio

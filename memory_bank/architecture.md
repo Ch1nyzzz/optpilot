@@ -162,7 +162,7 @@ Orchestrator.aoptimize():
 - **RepairPattern**: 可枚举的修复策略（13 个默认 pattern + 运行时可增加）
 - **PatternCatalog**: 动态 pattern 目录，加载/保存 JSON，支持 `add_pattern()` / `update_pattern()` / `effective` 标记
 - **RepairJacobian**: 矩阵存储 + 推荐 + 更新，持久化到 `library_store/jacobian/`
-- **冷启动**: 按 FM group 使用启发式 prior 打分（例如 B 偏 loop，C/D 偏 context/edge，F 偏 verification）
+- **冷启动**: 优先加载 `library_store/jacobian/data_driven_priors.json`（离线 OpenEvolve trace 分析产出），无则回退到手写启发式 prior
 - **推荐冷却**: 同一 FM group 下若某个 assigned pattern 连续失败达到阈值，下一轮临时 cooldown 1 轮，避免反复推荐同一方向
 - **Observed attribution**: online 不依赖 LLM 解释编辑；而是对 `old_dag -> new_dag` 做确定性结构差分，再映射成有限 pattern family
 - **数据驱动**: 随经验积累，贝叶斯混合逐渐从 prior 过渡到经验 success_rate
@@ -212,6 +212,57 @@ FM Classifier: MiniMax M2.5（100 条 blind trace 校准，与人类专家容忍
 - `lscpku/OlympiadBench-official` (`maths_en_no_proof`): 开放式数学题
 
 评分: 从 `\boxed{...}` 提取答案，精确匹配或 SymPy 符号匹配。
+
+## Offline Cold-Start Pipeline (2026-03-29)
+
+离线阶段用 OpenEvolve 盲进化作为冷启动，然后分析有效 trace 归纳数据驱动先验：
+
+```
+离线:
+  OpenEvolve 100 iter (train set only, 盲进化)
+       ↓
+  analyze_openevolve_traces.py:
+    1. 从 programs/*.json 提取 parent→child mutation
+    2. 筛选 train score 提升的 mutation
+    3. 在 held-out test set 上后验评估（防 overfit）
+    4. 只保留 test 也提升的 "真正有效" mutation
+    5. diff DAG → infer_observed_pattern_from_dags() 分类
+    6. 输出: data_driven_priors.json + jacobian_warmup.jsonl
+       ↓
+  暖启动 Jacobian matrix + 替换手写冷启动 prior
+
+在线:
+  Jacobian.recommend() 从第一轮起就有数据驱动的推荐
+```
+
+### Repair Recipe Library
+
+从有效 mutation 中归纳的修复原则，存储在 `library_store/recipes/`：
+
+```python
+RepairRecipe:
+    precondition: "Verifier 不加验证就接受 Solver 的答案"
+    action: "要求 Verifier 独立重新求解，再对比"
+    root_cause: "Verifier 对 Solver 形成信任依赖"
+    n_effective: 8    # 证据强度
+    avg_test_delta: 0.12
+```
+
+三级推荐：
+1. **Jacobian**: FM group → change_type (粗) + applied decay (防重复)
+2. **Recipe**: (fm_group, change_type) → 具体修复原则 (中)
+3. **Evolve prompt**: 注入 top-3 recipe 作为经验参考
+
+### Applied Decay
+
+已成功应用的 change_type 在后续推荐中 score × 0.3，鼓励多样性。
+跟踪粒度：session 级别（`session_applied_patterns`），不跨 session 累积。
+
+关键设计决策：
+- **后验过滤而非双评估**: 进化过程不接触 test set，无 leakage
+- **test set 必须提升才算有效**: 对齐优化方向，防止 train overfit
+- **先验来源分离**: `data_driven_priors.json` 可独立更新，不需要改代码
+- **Recipe 粒度**: 比 raw diff 抽象（可复用）、比 change type 具体（可操作）
 
 ## Architecture Change Policy
 

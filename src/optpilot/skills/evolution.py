@@ -90,8 +90,8 @@ a first-class pattern.
 ### Aggressive — 不破不立 (nothing in the catalog works)
    - If existing patterns have been exhausted and keep failing, **invent \
 entirely new repair strategies**. Do not just rephrase old patterns.
-   - Study the failure_summary and trace files to understand *what the actual \
-failure mechanism is*, then design a novel pattern that directly targets it.
+   - Study the failure_summary and trace files to understand *what issues keep \
+showing up together*, then design a novel pattern that directly targets them.
    - Think beyond the current categories. Consider strategies like: \
 restructuring the entire agent communication topology, introducing new \
 meta-cognitive prompts, changing the information flow architecture, \
@@ -111,9 +111,9 @@ preserved across loop iterations" actually guide the repair.
 - target_components must be from: agent_prompt, edge_carry_data, \
 edge_condition, edge_missing, loop_config, node_config, other.
 - Do not remove all patterns — keep at least 3 effective patterns.
-- Base your decision on the diagnosed failure mechanisms. Do not only react to \
-aggregate score drops; identify why shadow examples regressed and modify the \
-catalog to avoid repeating those failure mechanisms.
+- Base your decision on the diagnosed issue patterns. Do not only react to \
+aggregate score drops; identify which issue combinations keep appearing on \
+shadow examples and modify the catalog to avoid repeating them.
 - Prefer editing existing patterns first: description, effective flag, and \
 target_components are the lowest-cost levers. Add brand-new patterns only \
 when the diagnosis bundle shows the current catalog lacks the right repair idea.
@@ -142,8 +142,8 @@ broken patterns won't help. Think from first principles about what repair \
 strategy could actually fix this class of MAS failure.
 
 When reading `diagnosis_bundle.md`, answer these questions before editing:
-- What specific failure mechanisms caused shadow regressions?
-- Which current patterns encourage or fail to prevent those mechanisms?
+- What specific issue combinations showed up in shadow regressions?
+- Which current patterns encourage or fail to prevent those issues?
 - What new pattern wording, disabling decision, or new pattern would make the \
 repair LLM less likely to repeat them?"""
 
@@ -321,15 +321,13 @@ def _build_failure_summary(negatives: list[ReflectInsight], max_items: int = 20)
             f"- Reason: {neg.failure_reason}",
             f"- Lesson: {neg.lesson}",
             (
-                "- Shadow diagnosis: "
+                "- Shadow issues: "
                 + "; ".join(
-                    f"{item.get('primary_fm_id') or 'unknown'} via "
-                    f"{item.get('dag_component') or 'other'}: "
-                    f"{item.get('root_cause') or 'no root cause captured'}"
+                    ",".join(item.get("active_fm_ids", []) or ["none"])
                     for item in neg.metadata.get("shadow_gate", {}).get("diagnostics", [])[:3]
                 )
                 if neg.metadata.get("shadow_gate", {}).get("diagnostics")
-                else "- Shadow diagnosis: none"
+                else "- Shadow issues: none"
             ),
             "",
         ])
@@ -381,10 +379,7 @@ def _build_diagnosis_bundle(negatives: list[ReflectInsight], max_items: int = 10
                 markdown_lines.append(
                     f"- [{diag.get('benchmark', 'unknown')}] "
                     f"{diag.get('task_key', '')[:100]} | "
-                    f"primary={diag.get('primary_fm_id', '') or 'unknown'} | "
-                    f"component={diag.get('dag_component', '') or 'other'} | "
-                    f"agent={diag.get('agent', '') or 'unknown'} | "
-                    f"cause={diag.get('root_cause', '') or 'missing'}"
+                    f"issues={','.join(diag.get('active_fm_ids', []) or ['none'])}"
                 )
             markdown_lines.append("")
 

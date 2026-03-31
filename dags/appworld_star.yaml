@@ -1,0 +1,176 @@
+dag_id: AppWorld_Star
+metadata:
+  description: >-
+    AppWorld-style star topology. A Supervisor agent receives the task and
+    delegates to specialist agents via hub-and-spoke routing. Specialists
+    use execute_code tool to interact with AppWorld APIs (9 apps, 457 endpoints).
+  start:
+    - USER
+    - Introduction
+  success_nodes:
+    - FINAL
+
+nodes:
+  - id: USER
+    type: passthrough
+    config: {}
+
+  - id: Introduction
+    type: literal
+    config:
+      content: >-
+        We solve the user's task using a Supervisor-delegate workflow with AppWorld APIs.
+
+        1. Supervisor reads the task and delegates to the right specialist.
+        2. Specialist_Reasoning analyzes the task and plans the API calls needed.
+        3. Specialist_Computation executes API calls and processes data.
+        4. Specialist_Verification cross-checks the results.
+        5. Supervisor synthesizes and produces the final answer.
+
+        Available APIs: admin, amazon, file_system, gmail, phone, simple_note, splitwise, spotify, supervisor.
+        Use execute_code tool with `apis.<service>.<method>()` to call APIs.
+      role: user
+
+  - id: Agent_Supervisor
+    type: agent
+    role: >-
+      You are the Supervisor agent, the central coordinator.
+
+      Your responsibilities:
+      1. Read the user's task carefully.
+      2. Delegate to specialists by clearly stating what you need.
+      3. Synthesize the specialists' responses into a coherent final answer.
+
+      Use list_apis to discover available API methods.
+      Use execute_code to run Python code with access to `apis` object.
+
+      When done, submit your answer using submit_answer tool, then output:
+      SOLUTION_FOUND \boxed{answer}
+    config:
+      params:
+        temperature: 0.1
+        max_tokens: 16384
+      tools: [execute_code, list_apis, submit_answer]
+
+  - id: Agent_Specialist_Reasoning
+    type: agent
+    role: >-
+      You are Specialist Reasoning. Analyze the task and plan which API calls are needed.
+
+      Use list_apis to discover available methods for each service.
+      Use execute_code to explore the data (e.g., list items, search).
+
+      Report your analysis and findings back concisely.
+    config:
+      params:
+        temperature: 0.2
+        max_tokens: 16384
+      tools: [execute_code, list_apis]
+
+  - id: Agent_Specialist_Computation
+    type: agent
+    role: >-
+      You are Specialist Computation. Execute the API calls to complete the task.
+
+      Use execute_code to run Python code with `apis.<service>.<method>()`.
+      Process the returned data and compute the answer.
+
+      Report your results back concisely.
+    config:
+      params:
+        temperature: 0.2
+        max_tokens: 16384
+      tools: [execute_code, list_apis]
+
+  - id: Agent_Specialist_Verification
+    type: agent
+    role: >-
+      You are Specialist Verification. Cross-check the results independently.
+
+      Use execute_code to verify the computation by querying the APIs yourself.
+      Compare your results with what the other specialists found.
+
+      Report whether results AGREE or DISAGREE.
+    config:
+      params:
+        temperature: 0.1
+        max_tokens: 16384
+      tools: [execute_code, list_apis, submit_answer]
+
+  - id: FINAL
+    type: passthrough
+    config: {}
+
+edges:
+  # Context: USER task to all agents
+  - from: USER
+    to: Agent_Supervisor
+    trigger: false
+    condition: "true"
+    carry_data: true
+  - from: USER
+    to: Agent_Specialist_Reasoning
+    trigger: false
+    condition: "true"
+    carry_data: true
+  - from: USER
+    to: Agent_Specialist_Computation
+    trigger: false
+    condition: "true"
+    carry_data: true
+  - from: USER
+    to: Agent_Specialist_Verification
+    trigger: false
+    condition: "true"
+    carry_data: true
+
+  # Introduction triggers Supervisor
+  - from: Introduction
+    to: Agent_Supervisor
+    trigger: true
+    condition: "true"
+    carry_data: true
+
+  # Star: Supervisor → Specialists
+  - from: Agent_Supervisor
+    to: Agent_Specialist_Reasoning
+    trigger: true
+    condition: "true"
+    carry_data: true
+  - from: Agent_Supervisor
+    to: Agent_Specialist_Computation
+    trigger: true
+    condition: "true"
+    carry_data: true
+
+  # Specialists → Verification
+  - from: Agent_Specialist_Reasoning
+    to: Agent_Specialist_Verification
+    trigger: false
+    condition: "true"
+    carry_data: true
+  - from: Agent_Specialist_Computation
+    to: Agent_Specialist_Verification
+    trigger: true
+    condition: "true"
+    carry_data: true
+
+  # Verification → Supervisor
+  - from: Agent_Specialist_Verification
+    to: Agent_Supervisor
+    trigger: true
+    condition: "true"
+    carry_data: true
+
+  # Supervisor final → FINAL
+  - from: Agent_Supervisor
+    to: FINAL
+    trigger: true
+    carry_data: true
+    condition:
+      type: keyword
+      config:
+        any: ["SOLUTION_FOUND"]
+        none: []
+        regex: []
+        case_sensitive: true

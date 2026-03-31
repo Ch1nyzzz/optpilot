@@ -1,0 +1,13 @@
+[
+  {
+    "recipe_id": "F_topology_change_0",
+    "fm_group": "F",
+    "change_type": "topology_change",
+    "precondition": "The system exhibits verification failures such as low verification success, instruction non‑compliance, loops, or communication errors caused by extra coordination or consistency‑checking steps (e.g., presence of Planner, Checker, or Validator nodes that only generate plans or compare outputs).",
+    "action": "1. Identify intermediate nodes whose sole purpose is planning, checking, or validating (e.g., Planner, Checker, Validator). 2. Remove these nodes from the DAG. 3. Delete all edges to and from the removed nodes. 4. Add a direct edge from the entry point (e.g., Introduction or USER) to the core problem‑solving agent (Problem_Solver). 5. Adjust any trigger flags so the new edge is active (set trigger to true or remove false flags). 6. Update any system or verifier prompts to omit references to the removed consistency flag or planning step and simplify verification logic to a direct comparison of Solver and Executor outputs. 7. Revise introductory or documentation text to describe the new streamlined three‑agent workflow. 8. Optionally lower the model temperature (e.g., to 0.0‑0.05) to increase determinism in the simplified pipeline.",
+    "root_cause": "Unnecessary routing and extra hand‑offs introduced by Planner/Checker/Validator nodes create instruction drift, communication bottlenecks, and over‑complex verification logic, leading to verification failures.",
+    "n_effective": 6,
+    "avg_test_delta": 0.043333333333333314,
+    "example_diffs": []
+  }
+]

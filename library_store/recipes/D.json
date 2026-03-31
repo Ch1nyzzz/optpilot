@@ -1,0 +1,24 @@
+[
+  {
+    "recipe_id": "D_topology_change_0",
+    "fm_group": "D",
+    "change_type": "topology_change",
+    "precondition": "When the system exhibits communication failures, instruction drift, verification bottlenecks, or unnecessary hand‑offs (e.g., loops, non‑triggered edges, or low compliance) caused by intermediate coordination agents such as Planner, Checker, or Validator.",
+    "action": "1. Identify any intermediate agent nodes whose sole purpose is to generate a plan, perform consistency checks, or validate outputs (e.g., Planner, Checker, Validator). 2. Remove these nodes from the DAG. 3. Delete all edges to and from the removed nodes. 4. Add direct edges that connect the upstream and downstream agents (e.g., USER → Problem_Solver, Problem_Solver → Verifier). 5. Adjust edge triggers as needed (set to false or remove unnecessary triggers). 6. Update any literal introduction or documentation to reflect the new streamlined workflow (e.g., change from a 5‑step to a 3‑step description). 7. Optionally lower the model temperature (e.g., to 0.0–0.05) to increase determinism after simplifying the flow.",
+    "root_cause": "Redundant coordination/validation agents create extra routing steps and consistency checks that break the communication pipeline, leading to instruction non‑compliance, verification failures, and reasoning errors.",
+    "n_effective": 6,
+    "avg_test_delta": 0.043333333333333314,
+    "example_diffs": []
+  },
+  {
+    "recipe_id": "D_edge_route_0",
+    "fm_group": "D",
+    "change_type": "edge_route",
+    "precondition": "The system exhibits communication‑failure symptoms such as missing, delayed, or malformed messages that trace back to an intermediate agent (e.g., a Planner) whose sole purpose is to forward or transform data between two core agents.",
+    "action": "Delete the intermediate agent node and all edges that route data to or from it. Then create a direct edge (or edges) that connects the original source agent to the final destination agent, preserving any required data payloads or triggers. Remove any instructions that reference the removed agent (e.g., prompts to read its output).",
+    "root_cause": "Unnecessary intermediate routing introduces points of failure; eliminating the superfluous agent and its edges restores a clear, reliable communication path.",
+    "n_effective": 1,
+    "avg_test_delta": 0.010000000000000009,
+    "example_diffs": []
+  }
+]

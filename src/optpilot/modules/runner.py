@@ -33,6 +33,8 @@ class OptPilotRunner(MASRunner):
         benchmark_name_resolver: Callable[[str], str] | None = None,
         max_steps: int = 200,
         timeout: int = 600,
+        async_tool_registry: dict | None = None,
+        tool_setup_fn: Callable | None = None,
     ):
         """Initialize runner.
 
@@ -44,6 +46,10 @@ class OptPilotRunner(MASRunner):
             benchmark_name_resolver: Optional per-task benchmark resolver.
             max_steps: Safety limit on total node executions.
             timeout: Overall execution timeout in seconds.
+            async_tool_registry: Static tool registry passed to DAGExecutor.
+            tool_setup_fn: Per-task callable(task_prompt) -> async_tool_registry.
+                Called before each task to create task-specific tool environments.
+                Takes precedence over static async_tool_registry when set.
         """
         if dag is not None:
             self._dag = dag
@@ -58,6 +64,8 @@ class OptPilotRunner(MASRunner):
         self.benchmark_name_resolver = benchmark_name_resolver
         self.max_steps = max_steps
         self.timeout = timeout
+        self.async_tool_registry = async_tool_registry
+        self.tool_setup_fn = tool_setup_fn
 
     @property
     def dag(self) -> MASDAG:
@@ -155,6 +163,12 @@ class OptPilotRunner(MASRunner):
     ) -> MASTrace:
         """Async version of run_task."""
         run_dag = dag or self.dag
+
+        # Resolve tool registry: per-task setup takes precedence
+        tool_reg = self.async_tool_registry
+        if self.tool_setup_fn is not None:
+            tool_reg = self.tool_setup_fn(task_prompt)
+
         executor = DAGExecutor(
             dag=run_dag,
             llm_fn=call_llm,
@@ -162,6 +176,7 @@ class OptPilotRunner(MASRunner):
             max_global_steps=self.max_steps,
             timeout=timeout or self.timeout,
             async_llm_fn=acall_llm,
+            async_tool_registry=tool_reg,
         )
 
         exec_trace = await executor.arun(task_prompt)

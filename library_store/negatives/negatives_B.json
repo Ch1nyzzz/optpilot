@@ -1,0 +1,197 @@
+[
+  {
+    "round_index": 0,
+    "fm_id": "B",
+    "changes_attempted": [
+      "nothing changed"
+    ],
+    "before_fm_rate": 1.0,
+    "after_fm_rate": 1.0,
+    "before_pass_rate": 0.0,
+    "after_pass_rate": 0.0,
+    "failure_reason": "No concrete DAG change was applied.",
+    "lesson": "Generate at least one valid, materially different candidate before evaluation.",
+    "timestamp": "2026-03-29T12:49:25.492446",
+    "metadata": {}
+  },
+  {
+    "round_index": 0,
+    "fm_id": "B",
+    "changes_attempted": [
+      "nothing changed"
+    ],
+    "before_fm_rate": 1.0,
+    "after_fm_rate": 1.0,
+    "before_pass_rate": 0.0,
+    "after_pass_rate": 0.0,
+    "failure_reason": "No concrete DAG change was applied.",
+    "lesson": "Generate at least one valid, materially different candidate before evaluation.",
+    "timestamp": "2026-03-29T12:51:37.549196",
+    "metadata": {}
+  },
+  {
+    "round_index": 0,
+    "fm_id": "B",
+    "changes_attempted": [
+      "nothing changed"
+    ],
+    "before_fm_rate": 1.0,
+    "after_fm_rate": 1.0,
+    "before_pass_rate": 0.0,
+    "after_pass_rate": 0.0,
+    "failure_reason": "No concrete DAG change was applied.",
+    "lesson": "Generate at least one valid, materially different candidate before evaluation.",
+    "timestamp": "2026-03-29T16:44:32.124850",
+    "metadata": {}
+  },
+  {
+    "round_index": 0,
+    "fm_id": "B",
+    "changes_attempted": [
+      "nothing changed"
+    ],
+    "before_fm_rate": 1.0,
+    "after_fm_rate": 1.0,
+    "before_pass_rate": 0.0,
+    "after_pass_rate": 0.0,
+    "failure_reason": "No concrete DAG change was applied.",
+    "lesson": "Generate at least one valid, materially different candidate before evaluation.",
+    "timestamp": "2026-03-29T17:56:48.443460",
+    "metadata": {}
+  },
+  {
+    "round_index": 0,
+    "fm_id": "B",
+    "changes_attempted": [
+      "nothing changed"
+    ],
+    "before_fm_rate": 1.0,
+    "after_fm_rate": 1.0,
+    "before_pass_rate": 0.0,
+    "after_pass_rate": 0.0,
+    "failure_reason": "No concrete DAG change was applied.",
+    "lesson": "Generate at least one valid, materially different candidate before evaluation.",
+    "timestamp": "2026-03-29T18:16:19.045779",
+    "metadata": {}
+  },
+  {
+    "round_index": 0,
+    "fm_id": "B",
+    "changes_attempted": [
+      "nothing changed"
+    ],
+    "before_fm_rate": 1.0,
+    "after_fm_rate": 1.0,
+    "before_pass_rate": 0.0,
+    "after_pass_rate": 0.0,
+    "failure_reason": "No concrete DAG change was applied.",
+    "lesson": "Generate at least one valid, materially different candidate before evaluation.",
+    "timestamp": "2026-03-30T07:35:07.587074",
+    "metadata": {}
+  },
+  {
+    "round_index": 0,
+    "fm_id": "B",
+    "changes_attempted": [
+      "nothing changed"
+    ],
+    "before_fm_rate": 1.0,
+    "after_fm_rate": 1.0,
+    "before_pass_rate": 0.0,
+    "after_pass_rate": 0.0,
+    "failure_reason": "No concrete DAG change was applied.",
+    "lesson": "Generate at least one valid, materially different candidate before evaluation.",
+    "timestamp": "2026-03-30T07:41:45.325925",
+    "metadata": {}
+  },
+  {
+    "round_index": 0,
+    "fm_id": "B",
+    "changes_attempted": [
+      "nothing changed"
+    ],
+    "before_fm_rate": 1.0,
+    "after_fm_rate": 1.0,
+    "before_pass_rate": 0.0,
+    "after_pass_rate": 0.0,
+    "failure_reason": "No concrete DAG change was applied.",
+    "lesson": "Generate at least one valid, materially different candidate before evaluation.",
+    "timestamp": "2026-03-30T08:04:31.943326",
+    "metadata": {}
+  },
+  {
+    "round_index": 0,
+    "fm_id": "B",
+    "changes_attempted": [
+      "nothing changed"
+    ],
+    "before_fm_rate": 1.0,
+    "after_fm_rate": 1.0,
+    "before_pass_rate": 0.0,
+    "after_pass_rate": 0.0,
+    "failure_reason": "No concrete DAG change was applied.",
+    "lesson": "Generate at least one valid, materially different candidate before evaluation.",
+    "timestamp": "2026-03-30T08:09:29.662731",
+    "metadata": {}
+  },
+  {
+    "round_index": 0,
+    "fm_id": "B",
+    "changes_attempted": [
+      "nothing changed"
+    ],
+    "before_fm_rate": 1.0,
+    "after_fm_rate": 1.0,
+    "before_pass_rate": 0.0,
+    "after_pass_rate": 0.0,
+    "failure_reason": "No concrete DAG change was applied.",
+    "lesson": "Generate at least one valid, materially different candidate before evaluation.",
+    "timestamp": "2026-03-30T08:40:52.262868",
+    "metadata": {}
+  },
+  {
+    "round_index": 0,
+    "fm_id": "B",
+    "changes_attempted": [
+      "nothing changed"
+    ],
+    "before_fm_rate": 1.0,
+    "after_fm_rate": 1.0,
+    "before_pass_rate": 0.0,
+    "after_pass_rate": 0.0,
+    "failure_reason": "No concrete DAG change was applied.",
+    "lesson": "Generate at least one valid, materially different candidate before evaluation.",
+    "timestamp": "2026-03-30T11:24:34.643674",
+    "metadata": {}
+  },
+  {
+    "round_index": 0,
+    "fm_id": "B",
+    "changes_attempted": [
+      "nothing changed"
+    ],
+    "before_fm_rate": 1.0,
+    "after_fm_rate": 1.0,
+    "before_pass_rate": 0.0,
+    "after_pass_rate": 0.0,
+    "failure_reason": "No concrete DAG change was applied.",
+    "lesson": "Generate at least one valid, materially different candidate before evaluation.",
+    "timestamp": "2026-03-30T15:01:45.056199",
+    "metadata": {}
+  },
+  {
+    "round_index": 0,
+    "fm_id": "B",
+    "changes_attempted": [
+      "nothing changed"
+    ],
+    "before_fm_rate": 1.0,
+    "after_fm_rate": 1.0,
+    "before_pass_rate": 0.0,
+    "after_pass_rate": 0.0,
+    "failure_reason": "No concrete DAG change was applied.",
+    "lesson": "Generate at least one valid, materially different candidate before evaluation.",
+    "timestamp": "2026-03-30T23:21:19.010098",
+    "metadata": {}
+  }
+]

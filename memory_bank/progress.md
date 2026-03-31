@@ -55,9 +55,15 @@
 | 2026-03-26 | pass_rate 必须用 task_score | task_success 只是"是否跑完"，几乎恒为 True |
 | 2026-03-26 | Loop counter 需显式 loop: exit 标注 | 避免被动计数器每轮误触下游 |
 
+### Phase 8: Offline Cold-Start Pipeline (进行中 2026-03-29)
+- 离线 OpenEvolve 100 iter 盲进化作为冷启动
+- `analyze_openevolve_traces.py`: 提取有效 mutation → test set 后验过滤 → 归纳先验
+- Jacobian `_cold_start_score` 支持从 `data_driven_priors.json` 加载数据驱动先验
+- 替换原有手写 prior 和 `_DEFAULT_CATALOG`
+
 ## Next Steps
 
-1. **端到端验证**: `python -m experiments.run_ag2_mathchat_skill --tasks 9 --rounds 3`
-2. **Skill 特化**: 为每个 FM group 定制更精准的 prompt
-3. **Meta-evolution 验证**: 测试 SkillEvolver 连续失败后的自我改进
+1. **跑 OpenEvolve 100 iter 冷启动**: `python -m experiments.run_ag2_mathchat_openevolve --iterations 100`
+2. **离线分析**: `python -m experiments.analyze_openevolve_traces --openevolve-dir results/.../openevolve_output`
+3. **端到端验证**: 暖启动 Jacobian 后跑在线 pipeline，对比冷启动效果
 4. **扩大实验规模**: 完整 AG2 benchmark 上跑 Skill Workflow pipeline
