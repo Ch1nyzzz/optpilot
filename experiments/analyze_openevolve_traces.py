@@ -725,6 +725,111 @@ def apply_jacobian_warmup(
 #  Main                                                                #
 # ------------------------------------------------------------------ #
 
+def _load_benchmark_for_topology(
+    topology: str,
+    total_tasks: int,
+    n_train: int,
+) -> tuple[OfficialBenchmarkSuite, object, object, object]:
+    """Load benchmark suite, score_fn, benchmark_name_resolver, tool_setup_fn for a topology.
+
+    Returns (test_suite, score_fn, bench_resolver, tool_setup_fn).
+    For AG2, score_fn and tool_setup_fn are None (uses test_suite.score_task).
+    """
+    if topology == "ag2":
+        full_suite = load_online_benchmark_suite(total_tasks)
+        by_bench: dict[str, list] = defaultdict(list)
+        for ex in full_suite.examples:
+            by_bench[ex.benchmark_name].append(ex)
+        test_examples = []
+        for bname, examples in sorted(by_bench.items()):
+            bench_train = round(len(examples) * n_train / total_tasks)
+            bench_train = min(bench_train, len(examples))
+            test_examples.extend(examples[bench_train:])
+        test_suite = OfficialBenchmarkSuite(test_examples)
+        return test_suite, None, None, None
+
+    elif topology == "appworld":
+        from optpilot.data.benchmarks_appworld import load_appworld_examples, score_appworld
+        from optpilot.tools.appworld_tools import AppWorldWrapper, build_tools
+        all_examples = load_appworld_examples(
+            total_tasks, splits=("train", "dev", "test_normal", "test_challenge"),
+        )
+        test_examples = all_examples[n_train:]
+        test_suite = OfficialBenchmarkSuite(test_examples)
+        lookup = {ex.prompt: ex for ex in all_examples}
+
+        def tool_setup(tp):
+            ex = lookup.get(tp)
+            if ex is None:
+                return None
+            return build_tools(AppWorldWrapper(task_id=ex.task_id, experiment_name="offline_analysis"))
+
+        def score_fn(tp, _dag, exec_trace):
+            ex = lookup.get(tp)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_appworld(pred, ex.gold_answers[0])
+
+        return test_suite, score_fn, lambda _: "AppWorld", tool_setup
+
+    elif topology == "hyperagent":
+        from optpilot.data.benchmarks_swebench import load_swebench_examples, score_swebench
+        all_examples = load_swebench_examples(total_tasks)
+        test_examples = all_examples[n_train:]
+        test_suite = OfficialBenchmarkSuite(test_examples)
+        lookup = {ex.prompt: ex for ex in all_examples}
+
+        def tool_setup(tp):
+            from optpilot.tools.hyperagent_tools import CodeEnvironment, build_tools
+            ex = lookup.get(tp)
+            repo = ex.metadata.get("repo", "") if ex else ""
+            base_commit = ex.metadata.get("base_commit", "") if ex else ""
+            return build_tools(CodeEnvironment(repo=repo, base_commit=base_commit))
+
+        def score_fn(tp, _dag, exec_trace):
+            ex = lookup.get(tp)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_swebench(pred, ex.gold_answers[0])
+
+        return test_suite, score_fn, lambda _: "SWE-bench-Lite", tool_setup
+
+    elif topology == "magentic":
+        from optpilot.data.benchmarks_gaia import load_gaia_examples, score_gaia
+        from optpilot.tools.magentic_tools import GeneralEnvironment, build_tools
+        all_examples = load_gaia_examples(total_tasks)
+        test_examples = all_examples[n_train:]
+        test_suite = OfficialBenchmarkSuite(test_examples)
+        lookup = {ex.prompt: ex for ex in all_examples}
+
+        def tool_setup(tp):
+            ex = lookup.get(tp)
+            docs = ex.metadata.get("context_docs", {}) if ex else {}
+            return build_tools(GeneralEnvironment(docs))
+
+        def score_fn(tp, _dag, exec_trace):
+            ex = lookup.get(tp)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_gaia(pred, ex.gold_answers[0])
+
+        return test_suite, score_fn, lambda _: "GAIA", tool_setup
+
+    elif topology == "simple_star":
+        # Reuses GAIA benchmark + magentic tools
+        return _load_benchmark_for_topology("magentic", total_tasks, n_train)
+
+    elif topology == "simple_hier":
+        # Reuses SWE-bench benchmark + hyperagent tools
+        return _load_benchmark_for_topology("hyperagent", total_tasks, n_train)
+
+    else:
+        raise ValueError(f"Unknown topology: {topology}")
+
+
 def run(
     openevolve_dir: str,
     model: str = "openai/gpt-oss-120b",
@@ -734,13 +839,14 @@ def run(
     timeout: int = 600,
     skip_test_eval: bool = False,
     apply_warmup: bool = True,
+    topology: str = "ag2",
 ):
     openevolve_path = Path(openevolve_dir)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = RESULTS_DIR / f"offline_analysis_{timestamp}"
+    output_dir = RESULTS_DIR / f"offline_analysis_{topology}_{timestamp}"
 
     print("=" * 65)
-    print("  Offline Trace Analysis — OpenEvolve → Prior Extraction")
+    print(f"  Offline Trace Analysis — OpenEvolve → Prior Extraction ({topology})")
     print("=" * 65)
 
     # --- Step 1: Load programs ---
@@ -779,30 +885,26 @@ def run(
             ))
     else:
         # --- Step 4: Test set validation ---
-        print("\n[4/6] Validating on held-out test set...")
-        full_suite = load_online_benchmark_suite(total_tasks)
+        print(f"\n[4/6] Validating on held-out test set (topology={topology})...")
+        test_suite, custom_score_fn, bench_resolver, tool_setup_fn = (
+            _load_benchmark_for_topology(topology, total_tasks, n_train)
+        )
+        print(f"  Test set: {len(test_suite.tasks())} tasks")
 
-        # Split train/test same way as run_ag2_mathchat_openevolve.py
-        by_bench: dict[str, list] = defaultdict(list)
-        for ex in full_suite.examples:
-            by_bench[ex.benchmark_name].append(ex)
-        train_examples, test_examples = [], []
-        for bname, examples in sorted(by_bench.items()):
-            bench_train = round(len(examples) * n_train / total_tasks)
-            bench_train = min(bench_train, len(examples))
-            train_examples.extend(examples[:bench_train])
-            test_examples.extend(examples[bench_train:])
-
-        test_suite = OfficialBenchmarkSuite(test_examples)
-        print(f"  Test set: {len(test_examples)} tasks")
-
+        _BENCH_LABELS = {
+            "ag2": "AG2_MathChat",
+            "appworld": "AppWorld",
+            "hyperagent": "SWE-bench-Lite",
+            "magentic": "GAIA",
+        }
         runner = OptPilotRunner(
             dag=None,
             model=model,
-            benchmark_name="AG2_MathChat",
-            score_fn=test_suite.score_task,
-            benchmark_name_resolver=test_suite.benchmark_name_for_task,
+            benchmark_name=_BENCH_LABELS.get(topology, topology.upper()),
+            score_fn=custom_score_fn or test_suite.score_task,
+            benchmark_name_resolver=bench_resolver or test_suite.benchmark_name_for_task,
             timeout=timeout,
+            tool_setup_fn=tool_setup_fn,
         )
         diagnoser = Diagnoser()
 
@@ -836,14 +938,16 @@ def run(
 
     # --- Optional: Apply warmup ---
     if apply_warmup:
+        from optpilot.config import topology_jacobian_dir, topology_recipes_dir
         warmup_path = output_dir / "jacobian_warmup.jsonl"
         priors_path = output_dir / "data_driven_priors.json"
+        jac_dir = topology_jacobian_dir(topology)
         if warmup_path.exists():
-            print("\n[Warmup] Applying offline experience to Jacobian...")
-            apply_jacobian_warmup(warmup_path, priors_path=priors_path)
+            print(f"\n[Warmup] Applying offline experience to Jacobian ({topology})...")
+            apply_jacobian_warmup(warmup_path, priors_path=priors_path, jacobian_dir=jac_dir)
         if recipes:
-            print("[Warmup] Installing recipes to library...")
-            library = RecipeLibrary()
+            print(f"[Warmup] Installing recipes to library ({topology})...")
+            library = RecipeLibrary(base_dir=topology_recipes_dir(topology))
             library.add_batch(recipes)
             library.save()
             print(f"  {len(recipes)} recipes installed to {library.base_dir}")
@@ -874,10 +978,13 @@ def run(
 
 
 if __name__ == "__main__":
+    _TOPOLOGIES = ("ag2", "appworld", "hyperagent", "magentic", "simple_star", "simple_hier")
     parser = argparse.ArgumentParser(
         description="Analyze OpenEvolve traces → data-driven priors + Jacobian warmup",
     )
     parser.add_argument("--openevolve-dir", required=True, help="Path to OpenEvolve output directory")
+    parser.add_argument("--topology", default="ag2", choices=_TOPOLOGIES,
+                        help="MAS topology (determines benchmark for test validation)")
     parser.add_argument("--model", default="openai/gpt-oss-120b", help="Model for test evaluation")
     parser.add_argument("--total-tasks", type=int, default=200, help="Total benchmark tasks (train+test)")
     parser.add_argument("--n-train", type=int, default=100, help="Number of train tasks")
@@ -889,6 +996,7 @@ if __name__ == "__main__":
 
     run(
         openevolve_dir=args.openevolve_dir,
+        topology=args.topology,
         model=args.model,
         total_tasks=args.total_tasks,
         n_train=args.n_train,

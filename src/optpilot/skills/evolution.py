@@ -24,6 +24,8 @@ from optpilot.config import (
     META_EVOLVE_MAX_TURNS,
     NEGATIVES_DIR,
     PROJECT_ROOT,
+    topology_meta_evolve_traces_dir,
+    topology_negatives_dir,
 )
 from optpilot.llm import acall_llm_with_tools
 from optpilot.models import ReflectInsight
@@ -386,9 +388,14 @@ def _build_diagnosis_bundle(negatives: list[ReflectInsight], max_items: int = 10
     return "\n".join(markdown_lines).rstrip(), json.dumps(bundle_items, ensure_ascii=False, indent=2)
 
 
-def _build_meta_context(fm_group: str) -> str:
-    negatives_path = NEGATIVES_DIR / f"negatives_{fm_group}.json"
-    meta_trace_dir = _META_EVOLVE_TRACE_DIR / fm_group
+def _build_meta_context(
+    fm_group: str,
+    *,
+    negatives_dir: Path = NEGATIVES_DIR,
+    meta_evolve_trace_root: Path = _META_EVOLVE_TRACE_DIR,
+) -> str:
+    negatives_path = negatives_dir / f"negatives_{fm_group}.json"
+    meta_trace_dir = meta_evolve_trace_root / fm_group
 
     lines = [
         "# Catalog Evolution Context Index",
@@ -419,8 +426,10 @@ def _persist_trace(
     ctx: _CatalogContext,
     final_msgs: list[dict],
     negatives: list[ReflectInsight],
+    *,
+    meta_evolve_trace_root: Path = _META_EVOLVE_TRACE_DIR,
 ) -> str:
-    trace_dir = _META_EVOLVE_TRACE_DIR / fm_group
+    trace_dir = meta_evolve_trace_root / fm_group
     trace_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     trace_path = trace_dir / f"catalog_evolve_{timestamp}.json"
@@ -445,9 +454,16 @@ class CatalogEvolver:
         self,
         catalog: PatternCatalog | None = None,
         jacobian: RepairJacobian | None = None,
+        topology: str | None = None,
     ):
         self.catalog = catalog or PatternCatalog()
         self.jacobian = jacobian
+        self.topology = topology
+        self.negatives_dir = topology_negatives_dir(topology) if topology else NEGATIVES_DIR
+        self.meta_evolve_trace_root = (
+            topology_meta_evolve_traces_dir(topology)
+            if topology else _META_EVOLVE_TRACE_DIR
+        )
         self._failure_counts: dict[str, int] = {}
 
     def record_failure(self, fm_group: str) -> None:
@@ -499,7 +515,14 @@ class CatalogEvolver:
         ) or "No specific failures recorded."
 
         ctx = _CatalogContext(self.catalog)
-        ctx._write_file("meta_context.md", _build_meta_context(fm_group))
+        ctx._write_file(
+            "meta_context.md",
+            _build_meta_context(
+                fm_group,
+                negatives_dir=self.negatives_dir,
+                meta_evolve_trace_root=self.meta_evolve_trace_root,
+            ),
+        )
         ctx._write_file("failure_summary.md", _build_failure_summary(negatives))
         diagnosis_bundle_md, diagnosis_bundle_json = _build_diagnosis_bundle(negatives)
         ctx._write_file("diagnosis_bundle.md", diagnosis_bundle_md)
@@ -528,7 +551,13 @@ class CatalogEvolver:
             max_turns=META_EVOLVE_MAX_TURNS,
         )
 
-        _persist_trace(fm_group, ctx, final_msgs, negatives)
+        _persist_trace(
+            fm_group,
+            ctx,
+            final_msgs,
+            negatives,
+            meta_evolve_trace_root=self.meta_evolve_trace_root,
+        )
 
         # Save updated catalog
         self.catalog.save()

@@ -47,7 +47,7 @@ nodes:
     config:
       params:
         temperature: 0.1
-        max_tokens: 16384
+        max_tokens: 4096
       tools: [list_files, search_code, read_file]
 
   - id: Agent_Navigator
@@ -66,7 +66,7 @@ nodes:
     config:
       params:
         temperature: 0.2
-        max_tokens: 16384
+        max_tokens: 4096
       tools: [list_files, search_code, read_file]
 
   - id: Agent_Editor
@@ -86,7 +86,7 @@ nodes:
     config:
       params:
         temperature: 0.2
-        max_tokens: 16384
+        max_tokens: 4096
       tools: [read_file, edit_file, search_code]
 
   - id: Agent_Executor
@@ -106,7 +106,7 @@ nodes:
     config:
       params:
         temperature: 0.1
-        max_tokens: 16384
+        max_tokens: 4096
       tools: [run_command, read_file]
 
   - id: FINAL

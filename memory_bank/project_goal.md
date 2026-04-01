@@ -40,7 +40,17 @@ We use diagnostic results (which FM group, which agent, which step, what root ca
 
 ## Current Target
 
-- **MAS**: AG2 MathChat (3-agent GroupChat)
-- **Benchmarks**: MMLU + AIME 2025 + OlympiadBench (ground-truth scoring)
-- **Pipeline**: Skill Workflows (analyze → evolve → validate → reflect)
-- **Model**: MiniMax M2.5 via Together AI
+- **Primary online target**: AG2 MathChat on MMLU + AIME 2025 + OlympiadBench
+- **Cold-start target**: multi-topology MAS optimization on simplified Star/Hierarchical DAGs
+- **Benchmarks**:
+  - AG2 MathChat → MMLU + AIME 2025 + OlympiadBench
+  - `simple_star` → GAIA
+  - `simple_hier` → SWE-bench Lite
+- **Pipeline split**:
+  - `run_openevolve.py`: blind cold-start search to discover promising DAG mutations
+  - `analyze_openevolve_traces.py`: posterior filtering + prior extraction
+  - `run_skill.py`: diagnosis-driven online repair using Jacobian + recipes + negatives
+- **Role of OpenEvolve**: cold-start prior generator, not the final optimization method
+- **Model stack**:
+  - Online OptPilot pipeline: MiniMax M2.5 via Together AI
+  - Current OpenEvolve experiments: `openai/gpt-oss-120b`

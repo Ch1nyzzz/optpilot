@@ -1,0 +1,167 @@
+dag_id: SimpleStarGAIA
+metadata:
+  description: >-
+    Simplified 3-agent star topology for GAIA. Orchestrator (hub) dispatches to
+    Researcher (info gathering) and Solver (computation). Bounded 2-iteration
+    feedback loop via explicit LoopCounter.
+  start:
+    - USER
+    - Introduction
+  success_nodes:
+    - FINAL
+
+nodes:
+  - id: USER
+    type: passthrough
+    config: {}
+
+  - id: Introduction
+    type: literal
+    config:
+      content: >-
+        Solve the user's task using a hub-spoke workflow:
+        1. Orchestrator plans and delegates sub-tasks.
+        2. Researcher gathers relevant information via search.
+        3. Solver computes and verifies the answer.
+        4. Orchestrator synthesizes specialist outputs into the final answer.
+        The Orchestrator may request another round if the first attempt is insufficient.
+      role: user
+
+  - id: Agent_Orchestrator
+    type: agent
+    role: >-
+      You are the Orchestrator, the central hub of a star topology.
+
+      Round 1: Read the task carefully. Plan what information is needed and what
+      computation is required. Your output is sent to the Researcher and Solver.
+
+      Round 2 (if triggered): You receive both specialists' outputs. Synthesize
+      them into the final answer. If they disagree, resolve the conflict.
+
+      When you are confident in the answer, produce exactly:
+      SOLUTION_FOUND \boxed{answer}
+      If the problem is unsolvable, return:
+      SOLUTION_FOUND \boxed{None}
+    config:
+      params:
+        temperature: 0.1
+        max_tokens: 4096
+
+  - id: Agent_Researcher
+    type: agent
+    role: >-
+      You are the Researcher spoke. Your job is to gather information.
+
+      Use web_search to find relevant facts, formulas, or data.
+      Use read_document to fetch and read web pages or provided documents.
+
+      Be concise: report only the findings relevant to the task.
+      Do NOT produce a final boxed answer — that is the Orchestrator's job.
+    config:
+      params:
+        temperature: 0.3
+        max_tokens: 4096
+      tools: [web_search, read_document]
+
+  - id: Agent_Solver
+    type: agent
+    role: >-
+      You are the Solver spoke. Your job is to compute and verify answers.
+
+      Use calculator for mathematical expressions.
+      Use python_exec for complex computations or multi-step calculations.
+
+      Show your work step by step, then state the result clearly.
+      Do NOT produce a final boxed answer — that is the Orchestrator's job.
+    config:
+      params:
+        temperature: 0.2
+        max_tokens: 4096
+      tools: [calculator, python_exec]
+
+  - id: LoopCounter
+    type: loop_counter
+    config:
+      max_iterations: 2
+      message: "Star dispatch iteration limit reached."
+
+  - id: FINAL
+    type: passthrough
+    config: {}
+
+edges:
+  # --- USER context only to Orchestrator ---
+  - from: USER
+    to: Agent_Orchestrator
+    trigger: false
+    condition: "true"
+    carry_data: true
+
+  # --- Introduction triggers Orchestrator ---
+  - from: Introduction
+    to: Agent_Orchestrator
+    trigger: true
+    condition: "true"
+    carry_data: true
+
+  # --- Star dispatch: Orchestrator → both spokes ---
+  - from: Agent_Orchestrator
+    to: Agent_Researcher
+    trigger: true
+    condition: "true"
+    carry_data: true
+
+  - from: Agent_Orchestrator
+    to: Agent_Solver
+    trigger: true
+    condition: "true"
+    carry_data: true
+
+  # --- Researcher feeds Solver (BFS ensures Researcher runs first) ---
+  - from: Agent_Researcher
+    to: Agent_Solver
+    trigger: false
+    condition: "true"
+    carry_data: true
+
+  # --- Spoke convergence → LoopCounter ---
+  - from: Agent_Solver
+    to: LoopCounter
+    trigger: true
+    condition: "true"
+    carry_data: true
+
+  - from: Agent_Researcher
+    to: LoopCounter
+    trigger: false
+    condition: "true"
+    carry_data: true
+
+  # --- Loop continue: re-trigger Orchestrator ---
+  - from: LoopCounter
+    to: Agent_Orchestrator
+    trigger: true
+    condition: "true"
+    carry_data: true
+    loop: continue
+
+  # --- Loop exit: force Orchestrator to produce final answer ---
+  - from: LoopCounter
+    to: Agent_Orchestrator
+    trigger: true
+    condition: "true"
+    carry_data: true
+    loop: exit
+
+  # --- Orchestrator → FINAL (keyword termination) ---
+  - from: Agent_Orchestrator
+    to: FINAL
+    trigger: true
+    carry_data: true
+    condition:
+      type: keyword
+      config:
+        any: ["SOLUTION_FOUND"]
+        none: []
+        regex: []
+        case_sensitive: true

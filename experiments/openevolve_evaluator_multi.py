@@ -57,7 +57,7 @@ def _load_appworld():
     from optpilot.data.benchmarks_appworld import load_appworld_examples, score_appworld
     from optpilot.tools.appworld_tools import AppWorldWrapper, build_tools
 
-    examples = load_appworld_examples(_EVAL_TASKS)
+    examples = load_appworld_examples(_TOTAL_TASKS)
     suite = OfficialBenchmarkSuite(examples)
     example_lookup = {ex.prompt: ex for ex in examples}
 
@@ -85,7 +85,7 @@ def _load_hyperagent():
     """Load SWE-bench Lite benchmark with code tools."""
     from optpilot.data.benchmarks_swebench import load_swebench_examples, score_swebench
 
-    examples = load_swebench_examples(_EVAL_TASKS)
+    examples = load_swebench_examples(_TOTAL_TASKS)
     suite = OfficialBenchmarkSuite(examples)
     example_lookup = {ex.prompt: ex for ex in examples}
 
@@ -115,7 +115,7 @@ def _load_magentic():
     from optpilot.data.benchmarks_gaia import load_gaia_examples, score_gaia
     from optpilot.tools.magentic_tools import GeneralEnvironment, build_tools
 
-    examples = load_gaia_examples(_EVAL_TASKS)
+    examples = load_gaia_examples(_TOTAL_TASKS)
     suite = OfficialBenchmarkSuite(examples)
     example_lookup = {ex.prompt: ex for ex in examples}
 
@@ -143,6 +143,8 @@ _LOADERS = {
     "appworld": _load_appworld,
     "hyperagent": _load_hyperagent,
     "magentic": _load_magentic,
+    "simple_star": _load_magentic,    # reuses GAIA benchmark + magentic tools
+    "simple_hier": _load_hyperagent,  # reuses SWE-bench + hyperagent tools
 }
 
 

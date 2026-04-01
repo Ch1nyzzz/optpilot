@@ -6,8 +6,31 @@
 - Skill Workflows (A-F) with iterative convergence + reflection + meta-evolution.
 - Official benchmark scoring: MMLU + AIME 2025 + OlympiadBench.
 - Model: MiniMax M2.5 (unified for execution + diagnosis) via Together AI.
+- Multi-topology cold-start pipeline implemented for `simple_star` (GAIA) and
+  `simple_hier` (SWE-bench Lite).
+- `run_skill.py` now serves as the unified Jacobian-driven repair entrypoint for
+  multiple topologies.
+- Topology-isolated storage added for Jacobian warmup, recipes, negatives, and
+  catalog evolution traces.
 
-## Latest Update (2026-03-26)
+## Latest Update (2026-04-01)
+
+### Phase 9: Simplified Topologies + Multi-Topology Cold Start (进行中)
+- 新增 `simple_star_gaia.yaml` 和 `simple_hierarchical_swebench.yaml` 两个 3-agent DAG
+- `run_openevolve.py` / `openevolve_evaluator_multi.py` / `analyze_openevolve_traces.py`
+  已支持 `simple_star` 和 `simple_hier`
+- `run_skill.py` 已替代单一 AG2 skill 入口，统一支持多 topology
+- 修复多拓扑实验中的两个关键问题：
+  - OpenEvolve evaluator 先截断样本再按 prompt 过滤，导致 eval set 被静默缩小
+  - recipe / meta-evolve 仍读写全局目录，导致 topology 隔离只做了一半
+- 当前并行实验状态：
+  - `simple_star`: OpenEvolve 50 iter 已完成，进入 `analyze_openevolve_traces`
+  - `simple_hier`: OpenEvolve 50 iter 已完成，正在收尾 test evaluation / pipeline 切换
+- 当前结论趋势：
+  - blind OpenEvolve 可用于冷启动搜到更好的 DAG
+  - 真正的长期优化目标仍是 diagnosis-driven targeted repair，而不是继续依赖 blind evolution
+
+## Previous Update (2026-03-26)
 
 ### Phase 1: 文献 + 设计 (完成)
 - 21 篇论文，scope 确定为 MAS 优化
@@ -63,7 +86,15 @@
 
 ## Next Steps
 
-1. **跑 OpenEvolve 100 iter 冷启动**: `python -m experiments.run_ag2_mathchat_openevolve --iterations 100`
-2. **离线分析**: `python -m experiments.analyze_openevolve_traces --openevolve-dir results/.../openevolve_output`
-3. **端到端验证**: 暖启动 Jacobian 后跑在线 pipeline，对比冷启动效果
-4. **扩大实验规模**: 完整 AG2 benchmark 上跑 Skill Workflow pipeline
+1. **完成并汇总 `simple_star` / `simple_hier` 冷启动实验**:
+   - OpenEvolve result
+   - offline prior extraction
+   - online `run_skill` warm-start validation
+2. **比较 blind evolution vs diagnosis-driven repair**:
+   - sample efficiency
+   - held-out test accuracy
+   - FM reduction
+3. **验证 prior 迁移价值**:
+   - 从 simplified topology 迁移到更复杂的原始 Star / Hierarchical DAG
+4. **回到 AG2 主线做端到端验证**:
+   - 用冷启动 prior + Jacobian + recipes 运行完整在线 OptPilot pipeline

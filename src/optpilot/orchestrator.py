@@ -20,6 +20,7 @@ from optpilot.config import (
     SHADOW_EVAL_INTERVAL,
     SHADOW_META_EVOLVE_THRESHOLD,
     SKILL_EVOLVE_NUM_CANDIDATES,
+    topology_recipes_dir,
 )
 from optpilot.dag.core import MASDAG
 from optpilot.data.fm_taxonomy_6group import GROUP_IDS, GROUP_NAMES
@@ -276,15 +277,36 @@ class Orchestrator:
         dag: MASDAG,
         use_wandb: bool = False,
         negatives_dir: str | Path | None = None,
+        topology: str | None = None,
     ):
         self.runner = runner
         self.dag = dag
+        self.topology = topology
         self.diagnoser = Diagnoser()
         self.tracker = Tracker("skill_optimization", use_wandb=use_wandb)
-        self.negatives_store = NegativesStore(Path(negatives_dir or LIBRARY_DIR / "negatives"))
-        self.catalog = PatternCatalog()
-        self.jacobian = RepairJacobian(catalog=self.catalog)
-        self.evolver = CatalogEvolver(catalog=self.catalog, jacobian=self.jacobian)
+
+        if topology:
+            from optpilot.config import (
+                topology_catalog_path,
+                topology_jacobian_dir,
+                topology_negatives_dir,
+            )
+            neg_dir = Path(negatives_dir) if negatives_dir else topology_negatives_dir(topology)
+            jac_dir = topology_jacobian_dir(topology)
+            cat_path = topology_catalog_path(topology)
+            self.negatives_store = NegativesStore(neg_dir)
+            self.catalog = PatternCatalog(store_path=cat_path)
+            self.jacobian = RepairJacobian(catalog=self.catalog, base_dir=jac_dir)
+        else:
+            self.negatives_store = NegativesStore(Path(negatives_dir or LIBRARY_DIR / "negatives"))
+            self.catalog = PatternCatalog()
+            self.jacobian = RepairJacobian(catalog=self.catalog)
+
+        self.evolver = CatalogEvolver(
+            catalog=self.catalog,
+            jacobian=self.jacobian,
+            topology=topology,
+        )
 
     # ---------------------------------------------------------------- #
     #  Main optimization loop                                           #
@@ -468,6 +490,7 @@ class Orchestrator:
                 recommended_patterns=candidate_pattern_plan,
                 traces=traces,
                 profiles=profiles,
+                recipe_dir=topology_recipes_dir(self.topology) if self.topology else None,
             )
             budget.used_llm_calls += max(1, len(candidates))
 
@@ -847,6 +870,7 @@ class Orchestrator:
             recommended_patterns=candidate_pattern_plan,
             traces=traces,
             profiles=profiles,
+            recipe_dir=topology_recipes_dir(self.topology) if self.topology else None,
         )
         valid_candidates = [
             candidate for candidate in candidates

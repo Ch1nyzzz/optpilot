@@ -42,9 +42,14 @@ optpilot/
 │                              # (MMLU, AIME 2025, OlympiadBench)
 ├── dags/                      # MASDAG workflow definitions (YAML)
 │   ├── ag2_mathchat.yaml      # AG2 MathChat 3-agent GroupChat (primary)
+│   ├── simple_star_gaia.yaml  # Simplified 3-agent star topology for GAIA
+│   ├── simple_hierarchical_swebench.yaml # Simplified 3-agent hierarchy for SWE-bench
 │   └── chatdev.yaml           # ChatDev v1 workflow (reference)
 ├── experiments/               # Experiment pipelines
-│   ├── run_ag2_mathchat_skill.py  # Primary entry: AG2 × benchmarks × Jacobian loop
+│   ├── run_skill.py           # Unified multi-topology online repair entry
+│   ├── run_openevolve.py      # Unified multi-topology OpenEvolve cold-start entry
+│   ├── analyze_openevolve_traces.py # Offline prior extraction from OpenEvolve traces
+│   ├── run_ag2_mathchat_skill.py  # Older AG2-specific entry
 │   └── ...                    # offline/online pipelines, ablations
 ├── data/annotations/          # Blind/manual labeling packs for 6-group evaluation
 ├── tests/                     # Regression tests
@@ -54,6 +59,14 @@ optpilot/
 │   ├── pattern_catalog.json   # Evolved pattern catalog (JSON, runtime-modified)
 │   ├── skill_agent_traces/    # Per-FM-group tool-calling transcripts
 │   ├── meta_evolve_traces/    # Catalog evolution transcripts
+│   ├── ag2/                   # Per-topology isolated experience store
+│   │   ├── negatives/         # Topology-specific ReflectInsight history
+│   │   ├── jacobian/          # Topology-specific Jacobian warmup + outcomes
+│   │   ├── recipes/           # Topology-specific offline repair recipes
+│   │   ├── meta_evolve_traces/# Topology-specific catalog evolution traces
+│   │   └── pattern_catalog.json
+│   ├── simple_star/           # Same isolated layout for simple GAIA topology
+│   ├── simple_hier/           # Same isolated layout for simple SWE-bench topology
 │   ├── offline_hints/         # Offline repair hints
 │   ├── offline_skills/        # Offline wrapped skills
 │   ├── online_hints/          # Online repair hints
@@ -173,7 +186,23 @@ Orchestrator.aoptimize():
 1. CatalogEvolver 为 LLM 准备 catalog.json + failure_summary.md + meta_context.md
 2. LLM 通过 `add_pattern` / `update_pattern` / `bash` 工具修改目录
 3. 可添加新 pattern、修改 description、标记无效 pattern
-4. 保存更新后的 catalog 到 `library_store/pattern_catalog.json`
+4. 保存更新后的 catalog 到当前 topology 的 catalog 路径（旧入口默认 `library_store/pattern_catalog.json`）
+
+### Topology-Isolated Experience Store
+
+为防止不同 MAS topology 之间的经验污染，`run_skill.py` / `run_openevolve.py` /
+`analyze_openevolve_traces.py` 现在支持按 topology 隔离持久化状态：
+
+- `library_store/<topology>/negatives/`
+- `library_store/<topology>/jacobian/`
+- `library_store/<topology>/recipes/`
+- `library_store/<topology>/meta_evolve_traces/`
+- `library_store/<topology>/pattern_catalog.json`
+
+隔离规则：
+- `Orchestrator(topology=...)` 会把在线 repair、Jacobian 更新、catalog evolve 都绑定到对应 topology 子目录
+- offline analysis 写入的 recipe / Jacobian warmup 必须被同 topology 的 online repair 读取
+- 顶层全局目录 `library_store/negatives/`、`library_store/jacobian/`、`library_store/pattern_catalog.json` 仍保留给旧入口，作为向后兼容路径
 
 ## LLM Concurrency Control
 
@@ -235,6 +264,39 @@ FM Classifier: MiniMax M2.5（100 条 blind trace 校准，与人类专家容忍
   Jacobian.recommend() 从第一轮起就有数据驱动的推荐
 ```
 
+### Current Multi-Topology Cold-Start Setup
+
+当前用两条简化 topology 做低成本冷启动验证：
+
+- `simple_star`:
+  - benchmark = GAIA
+  - role = 简化版 star topology，用于搜集 general-task MAS 结构先验
+- `simple_hier`:
+  - benchmark = SWE-bench Lite
+  - role = 简化版 hierarchical topology，用于搜集 code-repair MAS 结构先验
+
+实验顺序是：
+
+```text
+run_openevolve.py
+  -> analyze_openevolve_traces.py
+  -> run_skill.py
+```
+
+设计意图：
+- 先在更小、更稳定、更便宜的 topology 上积累结构先验
+- 再把这些先验变成 topology-isolated 的 Jacobian warmup / recipes / catalog updates
+- 最终验证 diagnosis-driven repair 是否比 blind evolution 更高效、更可迁移
+
+### Role Of OpenEvolve
+
+在当前系统里，OpenEvolve 不是最终优化器，而是 cold-start prior generator：
+
+- 它负责在大而离散的 DAG 设计空间里做盲搜索
+- 它的输出要经过 offline posterior filtering 才会进入 OptPilot 经验库
+- 最终在线优化仍由 `Orchestrator + Diagnoser + RepairJacobian + CatalogEvolver`
+  驱动，而不是继续依赖 blind search
+
 ### Repair Recipe Library
 
 从有效 mutation 中归纳的修复原则，存储在 `library_store/recipes/`：
@@ -263,6 +325,7 @@ RepairRecipe:
 - **test set 必须提升才算有效**: 对齐优化方向，防止 train overfit
 - **先验来源分离**: `data_driven_priors.json` 可独立更新，不需要改代码
 - **Recipe 粒度**: 比 raw diff 抽象（可复用）、比 change type 具体（可操作）
+- **Recipe/Meta-evolve 隔离**: topology-aware 实验读取和写入 `library_store/<topology>/...`，避免 GAIA / SWE-bench / MathChat 互相污染经验
 
 ## Architecture Change Policy
 

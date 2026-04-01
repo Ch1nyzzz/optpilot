@@ -68,6 +68,16 @@ TOPOLOGIES: dict[str, tuple[str, str, str]] = {
         "openevolve_initial_dag_magentic.py",
         "magentic_one_star_openevolve",
     ),
+    "simple_star": (
+        "simple_star_gaia.yaml",
+        "openevolve_initial_dag_simple_star.py",
+        "simple_star_gaia_openevolve",
+    ),
+    "simple_hier": (
+        "simple_hierarchical_swebench.yaml",
+        "openevolve_initial_dag_simple_hier.py",
+        "simple_hier_swebench_openevolve",
+    ),
 }
 
 
@@ -243,6 +253,45 @@ def run(
                 return 0.0
             pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
             return score_gaia(pred, ex.gold_answers[0])
+    elif topology == "simple_star":
+        # Reuses GAIA benchmark + magentic tools
+        from optpilot.data.benchmarks_gaia import load_gaia_examples, score_gaia
+        from optpilot.tools.magentic_tools import GeneralEnvironment, build_tools as mg_build
+        all_examples = load_gaia_examples(total)
+        train_examples = all_examples[:n_train]
+        test_examples = all_examples[n_train:n_train + n_test]
+        benchmark_label = "GAIA"
+        _ss_lookup = {ex.prompt: ex for ex in all_examples}
+        def tool_setup_fn(task_prompt):
+            ex = _ss_lookup.get(task_prompt)
+            docs = ex.metadata.get("context_docs", {}) if ex else {}
+            return mg_build(GeneralEnvironment(docs))
+        def custom_score_fn(task_prompt, _dag, exec_trace):
+            ex = _ss_lookup.get(task_prompt)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_gaia(pred, ex.gold_answers[0])
+    elif topology == "simple_hier":
+        # Reuses SWE-bench benchmark + hyperagent tools
+        from optpilot.data.benchmarks_swebench import load_swebench_examples, score_swebench
+        all_examples = load_swebench_examples(total)
+        train_examples = all_examples[:n_train]
+        test_examples = all_examples[n_train:n_train + n_test]
+        benchmark_label = "SWE-bench-Lite"
+        _sh_lookup = {ex.prompt: ex for ex in all_examples}
+        def tool_setup_fn(task_prompt):
+            from optpilot.tools.hyperagent_tools import CodeEnvironment, build_tools as ha_build
+            ex = _sh_lookup.get(task_prompt)
+            repo = ex.metadata.get("repo", "") if ex else ""
+            base_commit = ex.metadata.get("base_commit", "") if ex else ""
+            return ha_build(CodeEnvironment(repo=repo, base_commit=base_commit))
+        def custom_score_fn(task_prompt, _dag, exec_trace):
+            ex = _sh_lookup.get(task_prompt)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_swebench(pred, ex.gold_answers[0])
     else:
         raise ValueError(f"Unknown topology: {topology}")
 
