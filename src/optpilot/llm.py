@@ -322,9 +322,9 @@ async def _arepair_json_dict(content: str, model: str) -> dict:
 def call_llm(
     messages: list[dict[str, str]],
     model: str = SYSTEM_MODEL,
-    temperature: float = 0.2,
+    temperature: float = 0.0,
     max_tokens: int = 16384,
-    max_retries: int = 8,
+    max_retries: int = 2,
 ) -> str:
     """Call Together AI LLM with exponential backoff.
 
@@ -368,9 +368,9 @@ def call_llm(
 async def acall_llm(
     messages: list[dict[str, str]],
     model: str = SYSTEM_MODEL,
-    temperature: float = 0.2,
+    temperature: float = 0.0,
     max_tokens: int = 16384,
-    max_retries: int = 8,
+    max_retries: int = 2,
     tools: list[dict] | None = None,
 ) -> str | dict:
     """Async Together AI call with model-family concurrency and RPM limits.
@@ -438,7 +438,7 @@ async def acall_llm_with_tools(
     temperature: float = 0.2,
     max_tokens: int = 16384,
     max_turns: int = 20,
-    max_retries: int = 8,
+    max_retries: int = 2,
 ) -> list[dict]:
     """Async LLM agent loop with tool calling.
 
