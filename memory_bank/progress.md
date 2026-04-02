@@ -2,68 +2,65 @@
 
 ## Current Status
 
-- Core OptPilot Skill Workflow pipeline implemented on AG2 MathChat.
-- Skill Workflows (A-F) with iterative convergence + reflection + meta-evolution.
-- Official benchmark scoring: MMLU + AIME 2025 + OlympiadBench.
-- Model: MiniMax M2.5 (unified for execution + diagnosis) via Together AI.
+主实验：**先验指导 OpenEvolve vs 盲进化 OpenEvolve**
 
-## Latest Update (2026-03-26)
+- 两阶段 pipeline 已实现：blind cold-start → prior extraction
+- 多目标 MAS 支持：ag2, agentcoder, simple_star, simple_hier, appworld, hyperagent, magentic
+- 经验存储全局化，通过 DAG 拓扑特征 (has_hub, has_loop) 自动区分
+- Official benchmark scoring: MMLU + AIME 2025 + OlympiadBench + HumanEval + GAIA + SWE-bench Lite
+- AgentCoder target 已实现（Programmer → TestDesigner → TestExecutor pipeline）
 
-### Phase 1: 文献 + 设计 (完成)
-- 21 篇论文，scope 确定为 MAS 优化
-- 差异化：diagnosis-driven targeted repair vs blind evolution
-- 实验设计文档完成（5 个实验 + ablation）
+## Latest Update (2026-04-01)
 
-### Phase 2: 实现 (完成)
-- 核心 pipeline 代码完成
-- MVP Target: AG2 MathChat（597 条 traces，短 trace ~5K chars）
-- 离线 pipeline 验证成功
+### 彻底清理 control flow 残留
+- 删除了旧的 control flow 分桶机制（pipeline / centralized_dispatch）
+- 删除了 merge_experience_by_control_flow.py 和 merge_experience_to_global.py
+- 清理了 config.py 中大量废弃变量（OFFLINE_HINTS_DIR, EVOLVED_SKILLS_DIR, META_EVOLVE_TRACES_DIR 等）
+- 经验存储改为全局 + 拓扑特征自动匹配
+- 修复了 analyze_openevolve_traces.py 蒸馏时不传 has_hub/has_loop 的 bug
+- 更新了全部文档（CLAUDE.md, AGENTS.md, memory_bank/）
 
-### Phase 3: 架构脱耦 (完成)
-- 自研 DAGExecutor，完全脱离 chatdev_v2
-- MASDAG 自有序列化格式，OptPilotRunner 内置执行
+### 新增 AgentCoder target
+- `benchmarks_humaneval.py`: HumanEval 加载 + subprocess 代码执行评分
+- `agentcoder_tools.py`: python_exec 工具
+- `openevolve_initial_dag_agentcoder.py`: 3-agent pipeline DAG
+- 注册到 run_openevolve.py 和 evaluator
+- 端到端验证通过（score=1.0 on canonical solution）
 
-### Phase 4: FM Classifier 校准 (完成)
-- 100 条 AG2 blind trace，6 位标注者
-- MiniMax M2.5 选定（与人类容忍率 89.9%–98.0%）
+### 代码库大清理
+- 删除了整个 Skill Workflow 架构
+- 删除了旧模块（_legacy/, judge, yaml_optimizer, repair_library 等）
+- 删除了废弃实验脚本和测试
 
-### Phase 5: Online 6-Group Pipeline (完成)
-- 全面切换 6-group taxonomy (A-F)
-- AG2 MathChat DAG 基于 MAST 论文 Appendix L
-- 统一 MiniMax M2.5
+## Historical Phases
 
-### Phase 6: Skill Workflow Architecture (完成)
-- 6 个 Skill Workflows (A-F)：内循环收敛 + 外循环反思 + 并行执行
-- Meta-evolution: Skill 连续失败后 LLM 修改 Skill 源码
-- 旧模块 → _legacy/
-
-### Phase 7: Critical Bug Fixes (完成 2026-03-26)
-- **修复 DAGExecutor agent 系统提示词丢失**: executor 现在回退读 `node.role`（YAML 用 `role` 而非 `prompt`）
-- **修复 DAGExecutor literal 内容丢失**: executor 现在回退读 `config.content`
-- **修复 `_pass_rate` 使用 `task_success` 而非 `task_score`**: 现在优先使用 benchmark ground-truth 评分
-- **修复 Turn Counter 每轮误触 FINAL**: 添加 `loop: exit` 标注，修复 fallback 逻辑（仅在无任何循环标注时才 fallback）
-- **修复 agent config.params 嵌套**: executor 支持 `config.params.temperature` 和 `config.temperature` 两种格式
+| Phase | 状态 | 内容 |
+|---|---|---|
+| 1: 文献 + 设计 | 完成 | 21 篇论文，scope 确定为 MAS 优化 |
+| 2: 实现 | 完成 | 核心 pipeline 代码，MVP: AG2 MathChat |
+| 3: 架构脱耦 | 完成 | 自研 DAGExecutor，脱离 chatdev_v2 |
+| 4: FM Classifier 校准 | 完成 | MiniMax M2.5 选定，与人类容忍率 89.9%–98.0% |
+| 5: Online 6-Group Pipeline | 完成 | 全面切换 6-group taxonomy |
+| 6: Skill Workflow | 完成→废弃 | 已删除 |
+| 7: Critical Bug Fixes | 完成 | DAGExecutor 系统提示词/literal/loop 修复 |
+| 8: Offline Cold-Start | 完成 | OpenEvolve 盲进化 + analyze_traces prior extraction |
+| 9: Multi-Target Cold-Start | 完成 | simple_star + simple_hier 实验 |
+| 10: 代码清理 + AgentCoder | 完成 | 删除旧代码，新增 agentcoder target |
+| 11: 清理 control flow 残留 | 完成 | 全局经验 + 拓扑特征自动匹配 |
 
 ## Key Research Decisions
 
 | 日期 | 决策 | 理由 |
 |------|------|------|
 | 2026-03-25 | 聚焦 MAS 而非 any optimizer | failure pattern 丰富，有现成 taxonomy 数据 |
-| 2026-03-25 | 核心差异化 = targeted repair vs blind evolution | MAST+OpenEvolve 做了 taxonomy-as-reward |
-| 2026-03-25 | MVP 切换到 AG2 (MathChat) | 597 条 trace，短 trace，3-agent 架构 |
-| 2026-03-25 | Together AI: MiniMax M2.5 (统一) | 统一 API，校准验证通过 |
+| 2026-03-25 | MVP: AG2 MathChat | 597 条 trace，短 trace，3-agent 架构 |
+| 2026-03-25 | Together AI: MiniMax M2.5 | 统一 API，校准验证通过 |
 | 2026-03-26 | pass_rate 必须用 task_score | task_success 只是"是否跑完"，几乎恒为 True |
-| 2026-03-26 | Loop counter 需显式 loop: exit 标注 | 避免被动计数器每轮误触下游 |
-
-### Phase 8: Offline Cold-Start Pipeline (进行中 2026-03-29)
-- 离线 OpenEvolve 100 iter 盲进化作为冷启动
-- `analyze_openevolve_traces.py`: 提取有效 mutation → test set 后验过滤 → 归纳先验
-- Jacobian `_cold_start_score` 支持从 `data_driven_priors.json` 加载数据驱动先验
-- 替换原有手写 prior 和 `_DEFAULT_CATALOG`
+| 2026-04-01 | 删除 Skill Workflow，聚焦 OpenEvolve | 主实验是 prior-guided vs blind evolution |
+| 2026-04-01 | 全局经验 + 拓扑自动匹配 | 替代旧的 control flow 硬编码分桶 |
 
 ## Next Steps
 
-1. **跑 OpenEvolve 100 iter 冷启动**: `python -m experiments.run_ag2_mathchat_openevolve --iterations 100`
-2. **离线分析**: `python -m experiments.analyze_openevolve_traces --openevolve-dir results/.../openevolve_output`
-3. **端到端验证**: 暖启动 Jacobian 后跑在线 pipeline，对比冷启动效果
-4. **扩大实验规模**: 完整 AG2 benchmark 上跑 Skill Workflow pipeline
+1. **并行跑 agentcoder blind vs guided 对比实验**
+2. **从 guided 结果蒸馏更新先验**
+3. **对比分析**：sample efficiency, held-out accuracy, FM reduction

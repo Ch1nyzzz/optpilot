@@ -152,23 +152,29 @@ _TASKS: list[dict[str, Any]] = [
 ]
 
 
-def load_gaia_examples(limit: int = 12) -> list[BenchmarkExample]:
-    """Load GAIA-style examples. Tries HF first, falls back to synthetic."""
+def load_gaia_examples(limit: int = 165) -> list[BenchmarkExample]:
+    """Load GAIA examples. Tries HF first, falls back to synthetic."""
     # Try loading real GAIA dataset
     try:
         from datasets import load_dataset
-        ds = load_dataset("gaia-benchmark/GAIA", "2023_all", split="validation")
+        ds = load_dataset(
+            "gaia-benchmark/GAIA", "2023_all", split="validation",
+            trust_remote_code=True,
+        )
         examples = []
         for i, item in enumerate(ds):
             if i >= limit:
                 break
             examples.append(BenchmarkExample(
                 benchmark_name="GAIA",
-                task_id=f"gaia_real_{i}",
+                task_id=item.get("task_id", f"gaia_real_{i}"),
                 prompt=item["Question"],
                 gold_answers=(str(item.get("Final answer", "")),),
                 answer_type="exact",
-                metadata={"context_docs": {}},
+                metadata={
+                    "context_docs": {},
+                    "level": item.get("Level", ""),
+                },
             ))
         if examples:
             return examples

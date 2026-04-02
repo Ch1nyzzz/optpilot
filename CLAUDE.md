@@ -4,32 +4,59 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**OptPilot** is a research project building an **Experience-Driven Repair System for Multi-Agent Systems (MAS)**. It diagnoses MAS failures using the 6-group FM taxonomy (A-F), generates targeted YAML-level repair actions via Skill Workflows, validates repairs against ground-truth benchmarks, and accumulates experience (negatives + meta-evolution) across runs.
+**OptPilot** is a research project investigating whether **data-driven priors** extracted from evolutionary search traces can improve the efficiency and quality of Multi-Agent System (MAS) optimization.
 
-Core thesis: **diagnosis-driven targeted repair, not blind evolution**. Competitors (MAST+OpenEvolve) use taxonomy as a better fitness signal for evolutionary search; we use diagnostic results to drive precise, targeted fixes.
+Core experiment: **prior-guided OpenEvolve vs blind OpenEvolve**. We run blind evolutionary search (via SkyDiscover/OpenEvolve) on MAS DAGs, extract structural priors from effective mutations, then compare guided search (with priors) against blind search (without priors) on the same tasks.
 
 ## Architecture
 
-**Skill Workflow closed-loop** (replaced the original Optimizer+Distiller+WrapUp):
+**Two-phase pipeline:**
 
-- **Orchestrator** (`orchestrator.py`): runs MAS → diagnoses → ranks FM groups → dispatches Skill Workflows (parallel)
-- **Runner** (`modules/runner.py`): executes MASDAG via built-in DAGExecutor, collects traces with ground-truth scoring
-- **Diagnoser** (`modules/diagnoser.py`): 6-group FM classification (MiniMax M2.5) + agent/step localization
-- **Skill Workflows** (`skills/`): 6 Python classes (A-F), each a complete repair agent: analyze → evolve (inner loop, YAML-level) → validate → reflect (outer loop)
-- **SkillEvolver** (`skills/evolution.py`): when a Skill hits the meta-evolution failure threshold (default 3, configurable), the LLM modifies the Skill's own Python source
+1. **Blind Cold-Start** (`run_openevolve.py`): SkyDiscover runs MAP-Elites evolutionary search on a target MAS DAG. No priors, no diagnosis — pure blind mutation.
+2. **Prior Extraction** (`analyze_openevolve_traces.py`): Analyzes effective mutations from phase 1 — posterior-filters on held-out test set, classifies structural changes, outputs data-driven priors (Jacobian warmup, recipes, pattern catalog updates).
+
+**Core modules:**
+
+- **DAG Abstraction** (`dag/core.py`, `dag/executor.py`): MASDAG representation + lightweight BFS executor
+- **Runner** (`modules/runner.py`): Executes MASDAG on benchmark tasks, collects traces with ground-truth scoring
+- **Diagnoser** (`modules/diagnoser.py`): 6-group FM classification (A-F) via LLM
+- **Evaluator** (`openevolve_evaluator_multi.py`): Fitness evaluator for SkyDiscover, supports multiple target MAS
+- **Prior Store** (`skills/jacobian.py`, `skills/recipes.py`, `skills/repair_patterns.py`): Accumulated structural priors
 
 MAS-as-DAG abstraction: any MAS = MASDAG(Nodes, Edges).
 - Node types: agent (LLM call), literal (fixed text), loop_counter (iteration control), passthrough
 - Edge attributes: trigger, condition (keyword matching), carry_data, loop (continue/exit)
-- Repair = YAML-level DAG modification by LLM
+- Optimization = YAML-level DAG modification by evolutionary search
 
-## Target System
+## Experience Storage
 
-**AG2 MathChat** (3-agent GroupChat) on official benchmarks.
-- DAG: `dags/ag2_mathchat.yaml` — Agent_Problem_Solver + Agent_Code_Executor + Agent_Verifier
-- Benchmarks: MMLU + AIME 2025 + OlympiadBench (ground-truth scoring)
+Experience is stored **globally** in `library_store/`. Topology differentiation is automatic:
+
+- `MASDAG.extract_topology_features()` detects `has_hub` and `has_loop` from DAG structure
+- `FailureSignature.signature_key()` embeds these features: e.g. `"B:hub=0:loop=1"`
+- Jacobian matrix rows naturally separate different topology families
+- No hardcoded topology mapping — new target MAS automatically finds matching experience
+
+Storage layout:
+- `library_store/jacobian/` — Repair effectiveness matrix + data-driven priors
+- `library_store/recipes/` — Distilled repair recipes (per FM group)
+- `library_store/negatives/` — Lessons from failed repairs
+- `library_store/pattern_catalog.json` — Evolved pattern catalog
+
+## Target Systems
+
+| target_mas | Benchmark | Topology |
+|---|---|---|
+| ag2 | MMLU + AIME 2025 + OlympiadBench | hub=0, loop=1 |
+| agentcoder | HumanEval | hub=0, loop=1 |
+| simple_star | GAIA | hub=1, loop=1 |
+| simple_hier | SWE-bench Lite | hub=0, loop=1 |
+| appworld | AppWorld | hub=1, loop=0 |
+| hyperagent | SWE-bench Lite | hub=0, loop=1 |
+| magentic | GAIA | hub=1, loop=1 |
+
 - Model: MiniMax M2.5 via Together AI (unified for execution + diagnosis)
-- Entry point: `python -m experiments.run_ag2_mathchat_skill --tasks 9 --rounds 3`
+- Initial DAG builders: `experiments/openevolve_initial_dag_*.py`
 
 ## DAG Executor Conventions
 
@@ -38,13 +65,12 @@ MAS-as-DAG abstraction: any MAS = MASDAG(Nodes, Edges).
 - Agent params: supports both flat `config.temperature` and nested `config.params.temperature`
 - Loop counter edges: use explicit `loop: exit` or `loop: continue` annotations; topology inference as fallback
 
-## Key Comparison Points
+## Key Entry Points
 
-| Competitor | What they do | Our difference |
-|---|---|---|
-| MAST/AgentFail | Taxonomy + dataset, no repair | We close the loop with automated repair |
-| AgentDebug | Inference-time re-rollout for single agent | We do design-time MAS optimization |
-| MAST+OpenEvolve | Taxonomy as fitness for blind evolution | We do diagnosis → targeted repair |
+- `python -m experiments.run_openevolve --target-mas agentcoder --iterations 50` — Blind cold-start
+- `python -m experiments.run_openevolve --target-mas agentcoder --iterations 50 --with-priors` — Prior-guided
+- `python -m experiments.analyze_openevolve_traces --openevolve-dir <dir> --target-mas agentcoder` — Extract priors
+- `python -m experiments.run_ag2_mathchat_baseline --tasks 20` — Baseline measurement
 
 ## Project Memory
 

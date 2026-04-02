@@ -12,6 +12,7 @@ Pipeline:
 Usage:
     python -m experiments.analyze_openevolve_traces \\
         --openevolve-dir results/.../openevolve_output \\
+        --target-mas simple_star \\
         --model openai/gpt-oss-120b \\
         --total-tasks 200 --n-train 100 \\
         --concurrency 512 --timeout 600
@@ -34,7 +35,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from optpilot.config import LIBRARY_DIR, RESULTS_DIR
+from optpilot.config import (
+    JACOBIAN_DIR,
+    LIBRARY_DIR,
+    RECIPES_DIR,
+    RESULTS_DIR,
+)
 from optpilot.dag.core import MASDAG
 from optpilot.data.benchmarks import (
     OfficialBenchmarkSuite,
@@ -418,6 +424,11 @@ def summarize_priors(
             continue
         pattern_counts[m.observed_pattern] += 1
 
+        # Extract topology features from the child DAG
+        topo = {"has_hub": False, "has_loop": False}
+        if m.child_dag is not None:
+            topo = m.child_dag.extract_topology_features()
+
         # For each FM group that improved (delta < 0), record an outcome
         for gid in GROUP_IDS:
             delta = m.fm_deltas.get(gid, 0.0)
@@ -427,6 +438,8 @@ def summarize_priors(
                     "success": True,
                     "fm_delta": delta,
                     "pass_delta": m.test_accuracy_delta,
+                    "has_hub": topo["has_hub"],
+                    "has_loop": topo["has_loop"],
                 })
 
         # Also record for FM groups that didn't improve (neutral/worsened)
@@ -437,6 +450,8 @@ def summarize_priors(
                     "success": False,
                     "fm_delta": delta,
                     "pass_delta": m.test_accuracy_delta,
+                    "has_hub": topo["has_hub"],
+                    "has_loop": topo["has_loop"],
                 })
 
     # --- Build Jacobian warmup records ---
@@ -452,6 +467,8 @@ def summarize_priors(
                 "success": o["success"],
                 "fm_delta": o["fm_delta"],
                 "pass_delta": o["pass_delta"],
+                "has_hub": o.get("has_hub", False),
+                "has_loop": o.get("has_loop", False),
                 "timestamp": datetime.now().isoformat(),
             })
 
@@ -706,6 +723,8 @@ def apply_jacobian_warmup(
             fm_delta=rec["fm_delta"],
             pass_delta=rec["pass_delta"],
             timestamp=rec.get("timestamp", ""),
+            has_hub=rec.get("has_hub", False),
+            has_loop=rec.get("has_loop", False),
         )
         jacobian.update(outcome)
 
@@ -725,6 +744,131 @@ def apply_jacobian_warmup(
 #  Main                                                                #
 # ------------------------------------------------------------------ #
 
+def _load_benchmark_for_target_mas(
+    target_mas: str,
+    total_tasks: int,
+    n_train: int,
+) -> tuple[OfficialBenchmarkSuite, object, object, object]:
+    """Load benchmark suite, score_fn, benchmark_name_resolver, tool_setup_fn for a target MAS.
+
+    Returns (test_suite, score_fn, bench_resolver, tool_setup_fn).
+    For AG2, score_fn and tool_setup_fn are None (uses test_suite.score_task).
+    """
+    if target_mas == "ag2":
+        full_suite = load_online_benchmark_suite(total_tasks)
+        by_bench: dict[str, list] = defaultdict(list)
+        for ex in full_suite.examples:
+            by_bench[ex.benchmark_name].append(ex)
+        test_examples = []
+        for bname, examples in sorted(by_bench.items()):
+            bench_train = round(len(examples) * n_train / total_tasks)
+            bench_train = min(bench_train, len(examples))
+            test_examples.extend(examples[bench_train:])
+        test_suite = OfficialBenchmarkSuite(test_examples)
+        return test_suite, None, None, None
+
+    elif target_mas == "appworld":
+        from optpilot.data.benchmarks_appworld import load_appworld_examples, score_appworld
+        from optpilot.tools.appworld_tools import AppWorldWrapper, build_tools
+        all_examples = load_appworld_examples(
+            total_tasks, splits=("train", "dev", "test_normal", "test_challenge"),
+        )
+        test_examples = all_examples[n_train:]
+        test_suite = OfficialBenchmarkSuite(test_examples)
+        lookup = {ex.prompt: ex for ex in all_examples}
+
+        def tool_setup(tp):
+            ex = lookup.get(tp)
+            if ex is None:
+                return None
+            return build_tools(AppWorldWrapper(task_id=ex.task_id, experiment_name="offline_analysis"))
+
+        def score_fn(tp, _dag, exec_trace):
+            ex = lookup.get(tp)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_appworld(pred, ex.gold_answers[0])
+
+        return test_suite, score_fn, lambda _: "AppWorld", tool_setup
+
+    elif target_mas == "hyperagent":
+        from optpilot.data.benchmarks_swebench import load_swebench_examples, score_swebench
+        all_examples = load_swebench_examples(total_tasks)
+        test_examples = all_examples[n_train:]
+        test_suite = OfficialBenchmarkSuite(test_examples)
+        lookup = {ex.prompt: ex for ex in all_examples}
+
+        def tool_setup(tp):
+            from optpilot.tools.hyperagent_tools import CodeEnvironment, build_tools
+            ex = lookup.get(tp)
+            repo = ex.metadata.get("repo", "") if ex else ""
+            base_commit = ex.metadata.get("base_commit", "") if ex else ""
+            return build_tools(CodeEnvironment(repo=repo, base_commit=base_commit))
+
+        def score_fn(tp, _dag, exec_trace):
+            ex = lookup.get(tp)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_swebench(pred, ex.gold_answers[0])
+
+        return test_suite, score_fn, lambda _: "SWE-bench-Lite", tool_setup
+
+    elif target_mas == "magentic":
+        from optpilot.data.benchmarks_gaia import load_gaia_examples, score_gaia
+        from optpilot.tools.magentic_tools import GeneralEnvironment, build_tools
+        all_examples = load_gaia_examples(total_tasks)
+        test_examples = all_examples[n_train:]
+        test_suite = OfficialBenchmarkSuite(test_examples)
+        lookup = {ex.prompt: ex for ex in all_examples}
+
+        def tool_setup(tp):
+            ex = lookup.get(tp)
+            docs = ex.metadata.get("context_docs", {}) if ex else {}
+            return build_tools(GeneralEnvironment(docs))
+
+        def score_fn(tp, _dag, exec_trace):
+            ex = lookup.get(tp)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_gaia(pred, ex.gold_answers[0])
+
+        return test_suite, score_fn, lambda _: "GAIA", tool_setup
+
+    elif target_mas == "agentcoder":
+        from optpilot.data.benchmarks_humaneval import load_humaneval_examples, score_humaneval
+        from optpilot.tools.agentcoder_tools import CodeExecutionEnvironment, build_tools
+        all_examples = load_humaneval_examples(total_tasks)
+        test_examples = all_examples[n_train:]
+        test_suite = OfficialBenchmarkSuite(test_examples)
+        lookup = {ex.prompt: ex for ex in all_examples}
+
+        def tool_setup(tp):
+            return build_tools(CodeExecutionEnvironment())
+
+        def score_fn(tp, _dag, exec_trace):
+            ex = lookup.get(tp)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_humaneval(pred, ex)
+
+        return test_suite, score_fn, lambda _: "HumanEval", tool_setup
+
+    elif target_mas == "simple_star":
+        # Reuses GAIA benchmark + magentic tools
+        return _load_benchmark_for_target_mas("magentic", total_tasks, n_train)
+
+    elif target_mas == "simple_hier":
+        # Reuses SWE-bench benchmark + hyperagent tools
+        return _load_benchmark_for_target_mas("hyperagent", total_tasks, n_train)
+
+    else:
+        raise ValueError(f"Unknown target_mas: {target_mas}")
+
+
 def run(
     openevolve_dir: str,
     model: str = "openai/gpt-oss-120b",
@@ -734,13 +878,13 @@ def run(
     timeout: int = 600,
     skip_test_eval: bool = False,
     apply_warmup: bool = True,
+    target_mas: str = "ag2",
 ):
     openevolve_path = Path(openevolve_dir)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = RESULTS_DIR / f"offline_analysis_{timestamp}"
-
+    output_dir = RESULTS_DIR / f"offline_analysis_{target_mas}_{timestamp}"
     print("=" * 65)
-    print("  Offline Trace Analysis — OpenEvolve → Prior Extraction")
+    print(f"  Offline Trace Analysis — OpenEvolve → Prior Extraction ({target_mas})")
     print("=" * 65)
 
     # --- Step 1: Load programs ---
@@ -779,30 +923,27 @@ def run(
             ))
     else:
         # --- Step 4: Test set validation ---
-        print("\n[4/6] Validating on held-out test set...")
-        full_suite = load_online_benchmark_suite(total_tasks)
+        print(f"\n[4/6] Validating on held-out test set (target_mas={target_mas})...")
+        test_suite, custom_score_fn, bench_resolver, tool_setup_fn = (
+            _load_benchmark_for_target_mas(target_mas, total_tasks, n_train)
+        )
+        print(f"  Test set: {len(test_suite.tasks())} tasks")
 
-        # Split train/test same way as run_ag2_mathchat_openevolve.py
-        by_bench: dict[str, list] = defaultdict(list)
-        for ex in full_suite.examples:
-            by_bench[ex.benchmark_name].append(ex)
-        train_examples, test_examples = [], []
-        for bname, examples in sorted(by_bench.items()):
-            bench_train = round(len(examples) * n_train / total_tasks)
-            bench_train = min(bench_train, len(examples))
-            train_examples.extend(examples[:bench_train])
-            test_examples.extend(examples[bench_train:])
-
-        test_suite = OfficialBenchmarkSuite(test_examples)
-        print(f"  Test set: {len(test_examples)} tasks")
-
+        _BENCH_LABELS = {
+            "ag2": "AG2_MathChat",
+            "appworld": "AppWorld",
+            "hyperagent": "SWE-bench-Lite",
+            "magentic": "GAIA",
+            "agentcoder": "HumanEval",
+        }
         runner = OptPilotRunner(
             dag=None,
             model=model,
-            benchmark_name="AG2_MathChat",
-            score_fn=test_suite.score_task,
-            benchmark_name_resolver=test_suite.benchmark_name_for_task,
+            benchmark_name=_BENCH_LABELS.get(target_mas, target_mas.upper()),
+            score_fn=custom_score_fn or test_suite.score_task,
+            benchmark_name_resolver=bench_resolver or test_suite.benchmark_name_for_task,
             timeout=timeout,
+            tool_setup_fn=tool_setup_fn,
         )
         diagnoser = Diagnoser()
 
@@ -838,12 +979,13 @@ def run(
     if apply_warmup:
         warmup_path = output_dir / "jacobian_warmup.jsonl"
         priors_path = output_dir / "data_driven_priors.json"
+        jac_dir = JACOBIAN_DIR
         if warmup_path.exists():
-            print("\n[Warmup] Applying offline experience to Jacobian...")
-            apply_jacobian_warmup(warmup_path, priors_path=priors_path)
+            print(f"\n[Warmup] Applying offline experience to global Jacobian...")
+            apply_jacobian_warmup(warmup_path, priors_path=priors_path, jacobian_dir=jac_dir)
         if recipes:
-            print("[Warmup] Installing recipes to library...")
-            library = RecipeLibrary()
+            print(f"[Warmup] Installing recipes to global library...")
+            library = RecipeLibrary(base_dir=RECIPES_DIR)
             library.add_batch(recipes)
             library.save()
             print(f"  {len(recipes)} recipes installed to {library.base_dir}")
@@ -874,10 +1016,13 @@ def run(
 
 
 if __name__ == "__main__":
+    _TARGET_MASES = ("ag2", "appworld", "hyperagent", "magentic", "simple_star", "simple_hier", "agentcoder")
     parser = argparse.ArgumentParser(
         description="Analyze OpenEvolve traces → data-driven priors + Jacobian warmup",
     )
     parser.add_argument("--openevolve-dir", required=True, help="Path to OpenEvolve output directory")
+    parser.add_argument("--target-mas", dest="target_mas", default="ag2", choices=_TARGET_MASES,
+                        help="Target MAS preset (determines DAG family and benchmark for test validation)")
     parser.add_argument("--model", default="openai/gpt-oss-120b", help="Model for test evaluation")
     parser.add_argument("--total-tasks", type=int, default=200, help="Total benchmark tasks (train+test)")
     parser.add_argument("--n-train", type=int, default=100, help="Number of train tasks")
@@ -889,6 +1034,7 @@ if __name__ == "__main__":
 
     run(
         openevolve_dir=args.openevolve_dir,
+        target_mas=args.target_mas,
         model=args.model,
         total_tasks=args.total_tasks,
         n_train=args.n_train,

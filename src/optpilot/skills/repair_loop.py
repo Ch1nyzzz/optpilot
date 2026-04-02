@@ -16,6 +16,7 @@ import json
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 from statistics import mean
 from typing import TYPE_CHECKING, Any
 
@@ -322,11 +323,11 @@ def has_material_change(
     return False
 
 
-def _load_recipe_text(fm_group: str) -> str:
+def _load_recipe_text(fm_group: str, recipe_dir: Path | None = None) -> str:
     """Load recipe text for a FM group from the recipe library."""
     try:
         from optpilot.skills.recipes import RecipeLibrary
-        library = RecipeLibrary()
+        library = RecipeLibrary(base_dir=recipe_dir)
         return library.format_for_prompt(fm_group, top_k=3)
     except Exception:
         return ""
@@ -723,6 +724,7 @@ async def agenerate_evolve_candidates(
     traces: list[MASTrace] | None = None,
     profiles: list[FMProfile] | None = None,
     num_candidates: int = SKILL_EVOLVE_NUM_CANDIDATES,
+    recipe_dir: Path | None = None,
 ) -> list[EvolveResult]:
     """Generate multiple diff-based mutation candidates for the current DAG."""
     fm_info = GROUP_DEFINITIONS[fm_group]
@@ -742,7 +744,7 @@ async def agenerate_evolve_candidates(
         )
 
     # Inject repair recipes from offline experience
-    recipe_text = _load_recipe_text(fm_group)
+    recipe_text = _load_recipe_text(fm_group, recipe_dir=recipe_dir)
     if recipe_text:
         recommended_pattern_text += "\n\n" + recipe_text
 
@@ -874,6 +876,7 @@ async def aevolve(
     recommended_pattern: Any | None = None,
     traces: list[MASTrace] | None = None,
     profiles: list[FMProfile] | None = None,
+    recipe_dir: Path | None = None,
 ) -> EvolveResult:
     """Backward-compatible wrapper that returns the first generated candidate."""
     candidates = await agenerate_evolve_candidates(
@@ -885,6 +888,7 @@ async def aevolve(
         recommended_pattern=recommended_pattern,
         traces=traces,
         profiles=profiles,
+        recipe_dir=recipe_dir,
     )
     if candidates:
         return candidates[0]

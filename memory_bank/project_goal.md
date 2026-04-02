@@ -2,18 +2,18 @@
 
 ## Mission
 
-Build **OptPilot**, a diagnosis-driven repair system for Multi-Agent Systems (MAS) that:
-1. Diagnoses MAS failures using 6-group FM taxonomy (A-F)
-2. Generates targeted YAML-level repairs via Skill Workflows
-3. Validates repairs against ground-truth benchmarks
-4. Accumulates experience (negatives + meta-evolution) across runs
+Build **OptPilot**, a system that investigates whether data-driven structural priors can improve evolutionary optimization of Multi-Agent Systems (MAS).
 
-## Core Thesis
+## Core Experiment
 
-**Diagnosis → targeted repair**, not blind evolution.
+**Prior-guided OpenEvolve vs Blind OpenEvolve**
 
-Competitors use taxonomy as a better fitness signal for evolutionary search (MAST+OpenEvolve).
-We use diagnostic results (which FM group, which agent, which step, what root cause) to drive precise, targeted fixes.
+1. Run blind evolutionary search (SkyDiscover/OpenEvolve) on MAS DAGs
+2. Extract structural priors from effective mutations (posterior-filtered)
+3. Run blind and guided in parallel for fair comparison
+4. Distill from guided results to iteratively improve priors
+
+Key question: Do extracted priors improve sample efficiency and generalization?
 
 ## Scope Decision (2026-03-25)
 
@@ -24,23 +24,19 @@ We use diagnostic results (which FM group, which agent, which step, what root ca
 - 现有 taxonomy 数据可直接借鉴（MAST 1642 条 trace，AgentFail 307 条）
 - 学术热度高
 
-## 核心差异化定位
+## Current Targets
 
-### vs MAST / AgentFail
-- 它们只做诊断分析（"哪里坏了"），不做修复
-- 我们自动修复 + 蒸馏经验
+| target_mas | Benchmark | Topology (auto-detected) |
+|---|---|---|
+| ag2 | MMLU + AIME 2025 + OlympiadBench | hub=0, loop=1 |
+| agentcoder | HumanEval | hub=0, loop=1 |
+| simple_star | GAIA | hub=1, loop=1 |
+| simple_hier | SWE-bench Lite | hub=0, loop=1 |
+| appworld | AppWorld | hub=1, loop=0 |
+| hyperagent | SWE-bench Lite | hub=0, loop=1 |
+| magentic | GAIA | hub=1, loop=1 |
 
-### vs AgentDebug
-- inference-time re-rollout（单 agent）
-- 我们做 design-time MAS 架构优化
+## Model Stack
 
-### vs MAST + OpenEvolve
-- 用 MAST taxonomy 作为 fitness function 驱动 OpenEvolve 盲进化
-- 我们用诊断信号做定向修复——不是更好的 reward，而是更好的 search
-
-## Current Target
-
-- **MAS**: AG2 MathChat (3-agent GroupChat)
-- **Benchmarks**: MMLU + AIME 2025 + OlympiadBench (ground-truth scoring)
-- **Pipeline**: Skill Workflows (analyze → evolve → validate → reflect)
-- **Model**: MiniMax M2.5 via Together AI
+- MAS execution + FM diagnosis: MiniMax M2.5 via Together AI
+- OpenEvolve experiments: `openai/gpt-oss-120b`

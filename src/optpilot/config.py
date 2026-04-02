@@ -112,3 +112,40 @@ EVOLVED_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 NEGATIVES_DIR.mkdir(parents=True, exist_ok=True)
 JACOBIAN_DIR.mkdir(parents=True, exist_ok=True)
 DAG_DIR.mkdir(exist_ok=True)
+
+
+# -- Topology-aware path helpers ------------------------------------------
+
+def topology_library_dir(topology: str) -> Path:
+    """Return per-topology library_store subdirectory, creating it if needed."""
+    d = LIBRARY_DIR / topology
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def topology_jacobian_dir(topology: str) -> Path:
+    d = topology_library_dir(topology) / "jacobian"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def topology_negatives_dir(topology: str) -> Path:
+    d = topology_library_dir(topology) / "negatives"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def topology_catalog_path(topology: str) -> Path:
+    return topology_library_dir(topology) / "pattern_catalog.json"
+
+
+def topology_recipes_dir(topology: str) -> Path:
+    d = topology_library_dir(topology) / "recipes"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def topology_meta_evolve_traces_dir(topology: str) -> Path:
+    d = topology_library_dir(topology) / "meta_evolve_traces"
+    d.mkdir(parents=True, exist_ok=True)
+    return d

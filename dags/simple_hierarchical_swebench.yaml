@@ -1,0 +1,159 @@
+dag_id: SimpleHierarchicalSWE
+metadata:
+  description: >-
+    Simplified 3-agent hierarchical topology for SWE-bench Lite. Planner
+    (top) decomposes and navigates, Coder (middle) implements the fix,
+    Verifier (bottom) runs tests. Bounded 3-iteration fix-test loop.
+  start:
+    - USER
+    - Introduction
+  success_nodes:
+    - FINAL
+
+nodes:
+  - id: USER
+    type: passthrough
+    config: {}
+
+  - id: Introduction
+    type: literal
+    config:
+      content: >-
+        Fix the reported bug using a hierarchical workflow:
+        1. Planner analyzes the bug report and locates relevant code.
+        2. Coder implements the fix based on Planner's analysis.
+        3. Verifier runs tests to confirm the fix works.
+        If tests fail, the cycle repeats with updated context.
+      role: user
+
+  - id: Agent_Planner
+    type: agent
+    role: >-
+      You are the Planner, top of the hierarchy.
+
+      Round 1: Read the bug report. Use search_code and list_files to locate
+      the relevant source files. Use read_file to examine the code around the
+      reported bug. Identify the root cause.
+      Provide the Coder with: (a) file paths to edit, (b) what to change,
+      (c) the root cause explanation.
+
+      Later rounds: You receive test results from the Verifier. If tests
+      failed, re-analyze the issue and provide updated fix instructions.
+
+      When the Verifier confirms tests pass, output exactly:
+      SOLUTION_FOUND \boxed{fixed}
+    config:
+      params:
+        temperature: 0.1
+        max_tokens: 4096
+      tools: [search_code, list_files, read_file]
+
+  - id: Agent_Coder
+    type: agent
+    role: >-
+      You are the Coder, middle of the hierarchy.
+
+      You receive the Planner's analysis of where the bug is and what to fix.
+      1. Use read_file to see the exact code that needs changing.
+      2. Use edit_file to apply the fix. Be precise: match the exact text.
+      3. You may need multiple edits across files.
+
+      After editing, describe what you changed and why.
+      Do NOT produce a final answer — that is the Planner's job.
+    config:
+      params:
+        temperature: 0.2
+        max_tokens: 4096
+      tools: [read_file, edit_file, search_code]
+
+  - id: Agent_Verifier
+    type: agent
+    role: >-
+      You are the Verifier, bottom of the hierarchy.
+
+      You receive the Coder's changes and the context of the bug.
+      1. Use run_command to run relevant tests.
+      2. Use read_file to inspect the changes if needed.
+
+      Report clearly: TESTS_PASS if all tests pass, or TESTS_FAIL with
+      details about which tests failed and any error messages.
+      Do NOT produce a final answer — that is the Planner's job.
+    config:
+      params:
+        temperature: 0.1
+        max_tokens: 4096
+      tools: [run_command, read_file]
+
+  - id: LoopCounter
+    type: loop_counter
+    config:
+      max_iterations: 3
+      message: "Fix iteration limit reached."
+
+  - id: FINAL
+    type: passthrough
+    config: {}
+
+edges:
+  # --- USER context only to Planner (top of hierarchy) ---
+  - from: USER
+    to: Agent_Planner
+    trigger: false
+    condition: "true"
+    carry_data: true
+
+  # --- Introduction triggers Planner ---
+  - from: Introduction
+    to: Agent_Planner
+    trigger: true
+    condition: "true"
+    carry_data: true
+
+  # --- Hierarchical chain: Planner → Coder → Verifier ---
+  - from: Agent_Planner
+    to: Agent_Coder
+    trigger: true
+    condition: "true"
+    carry_data: true
+
+  - from: Agent_Coder
+    to: Agent_Verifier
+    trigger: true
+    condition: "true"
+    carry_data: true
+
+  # --- Verifier → LoopCounter (backflow) ---
+  - from: Agent_Verifier
+    to: LoopCounter
+    trigger: true
+    condition: "true"
+    carry_data: true
+
+  # --- Loop continue: re-trigger Planner with Verifier feedback ---
+  - from: LoopCounter
+    to: Agent_Planner
+    trigger: true
+    condition: "true"
+    carry_data: true
+    loop: continue
+
+  # --- Loop exit: force Planner to produce final answer ---
+  - from: LoopCounter
+    to: Agent_Planner
+    trigger: true
+    condition: "true"
+    carry_data: true
+    loop: exit
+
+  # --- Planner → FINAL (keyword termination) ---
+  - from: Agent_Planner
+    to: FINAL
+    trigger: true
+    carry_data: true
+    condition:
+      type: keyword
+      config:
+        any: ["SOLUTION_FOUND"]
+        none: []
+        regex: []
+        case_sensitive: true

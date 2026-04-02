@@ -1,62 +1,76 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Project Structure
 
-This repository is currently a lightweight research workspace centered on
-[`related_papers.md`](./related_papers.md), which holds literature notes and project
-positioning for a meta-optimizer research direction. Keep new top-level files focused
-and obvious: use descriptive Markdown names such as `experiment_notes.md` or
-`baseline_comparison.md`.
+```
+optpilot/
+├── src/optpilot/              # Core library
+│   ├── config.py              # Global configuration (env, models, paths, rate limits)
+│   ├── models.py              # Core data models (MASTrace, FMProfile, EvolveResult, etc.)
+│   ├── llm.py                 # LLM interface (Together AI, sync + async, rate limiting)
+│   ├── dag/                   # DAG abstraction and execution
+│   │   ├── core.py            # MASDAG, DAGNode, DAGEdge + topology feature detection
+│   │   └── executor.py        # DAGExecutor: lightweight BFS workflow engine
+│   ├── modules/               # Core modules
+│   │   ├── base_runner.py     # MASRunner abstract base
+│   │   ├── runner.py          # OptPilotRunner (DAG execution + benchmark scoring)
+│   │   └── diagnoser.py       # FM diagnosis via LLM (6-group, concurrent)
+│   ├── skills/                # Prior store and pattern analysis
+│   │   ├── jacobian.py        # RepairJacobian matrix (failure×pattern → success rate)
+│   │   ├── recipes.py         # Repair recipe library
+│   │   └── repair_patterns.py # PatternCatalog + mutation classification
+│   ├── data/                  # Benchmarks and taxonomy
+│   │   ├── fm_taxonomy_6group.py  # 6-group FM taxonomy (A-F)
+│   │   ├── benchmarks.py         # MMLU, AIME 2025, OlympiadBench
+│   │   ├── benchmarks_humaneval.py # HumanEval (code generation)
+│   │   ├── benchmarks_appworld.py
+│   │   ├── benchmarks_gaia.py
+│   │   └── benchmarks_swebench.py
+│   └── tools/                 # External tool integrations per target MAS
+│       ├── agentcoder_tools.py
+│       ├── appworld_tools.py
+│       ├── hyperagent_tools.py
+│       └── magentic_tools.py
+├── experiments/               # Experiment entry points
+│   ├── run_openevolve.py      # Blind / prior-guided OpenEvolve
+│   ├── analyze_openevolve_traces.py  # Prior extraction from traces
+│   ├── openevolve_evaluator_multi.py # Multi-target fitness evaluator
+│   ├── openevolve_initial_dag*.py    # Initial DAG builders per target
+│   ├── run_ag2_mathchat_baseline.py  # Baseline measurement
+│   └── openevolve_config.yaml        # SkyDiscover configuration
+├── library_store/             # Global experience store
+│   ├── jacobian/              # Repair effectiveness matrix
+│   ├── recipes/               # Repair recipes (per FM group)
+│   ├── negatives/             # Lessons from failed repairs
+│   └── pattern_catalog.json   # Evolved pattern catalog
+├── tests/                     # Regression tests (pytest)
+└── memory_bank/               # Project documentation
+```
 
-The repository is flat today. Do not scatter drafts across the root. If you add code,
-data, or figures, introduce clear directories such as `scripts/`, `data/`, or
-`figures/` and keep research notes in Markdown files.
+## Build & Test
 
-Keep persistent project memory under `memory_bank/`:
+```bash
+pip install -e .
+python -m pytest tests/ -x -q
 
-- `memory_bank/project_goal.md` for goals and scope
-- `memory_bank/progress.md` for milestone tracking
-- `memory_bank/architecture.md` for architecture and structure decisions
+# Parallel comparison experiment
+python -m experiments.run_openevolve --target-mas agentcoder --iterations 50 &
+python -m experiments.run_openevolve --target-mas agentcoder --iterations 50 --with-priors &
+wait
 
-Any architecture or repository-structure change must update
-`memory_bank/architecture.md` in the same change.
+# Extract priors from guided run
+python -m experiments.analyze_openevolve_traces \
+    --openevolve-dir results/..._priors_artifacts/openevolve_output \
+    --target-mas agentcoder
+```
 
-## Build, Test, and Development Commands
+## Coding Style
 
-There is no build system or automated test suite configured yet. Use lightweight
-commands to inspect and validate changes:
+- Python 3.11+, type hints throughout
+- Filenames: lowercase with underscores
+- Async-first for LLM calls and batch operations
+- Keep `memory_bank/` updated when architecture changes
 
-- `rg --files` lists the current repository contents.
-- `sed -n '1,120p' related_papers.md` spot-checks edited sections.
-- `rg -n 'TODO|FIXME|XXX' .` finds unresolved placeholders before submission.
-- `markdownlint AGENTS.md related_papers.md` is recommended if `markdownlint` is
-  installed locally.
+## Commit Guidelines
 
-## Coding Style & Naming Conventions
-
-Treat this repository as documentation-first. Use Markdown with ATX headings (`#`,
-`##`), short paragraphs, and compact bullet lists. Keep filenames lowercase with
-underscores, for example `related_papers.md`.
-
-Preserve the language and tone of the file you are editing. For research content, name
-papers and systems precisely on first mention and avoid informal shorthand unless it is
-already defined.
-
-## Testing Guidelines
-
-Testing here means review and consistency checks rather than unit tests. Before opening
-a change, verify heading structure, table formatting, and link syntax by reading the
-rendered Markdown or linting it locally.
-
-If you add code later, place tests beside that code or under a top-level `tests/`
-directory and document the exact run command in this file.
-
-## Commit & Pull Request Guidelines
-
-There is no mature repo-local convention yet, but the available history uses short,
-lowercase subjects such as `add init` and `readme`. Follow that pattern with concise,
-imperative commit messages, for example `add paper summary` or `refine optimizer notes`.
-
-Pull requests should state what changed, why it matters, and which sections or sources
-were added or revised. Include screenshots only when Markdown rendering or figures are
-part of the change.
+Short, imperative commit messages, e.g. `add prior extraction pipeline` or `fix evaluator task split`.
