@@ -1,10 +1,37 @@
-# EVOLVE-BLOCK-START
-def build_dag():
-    """Minimal star topology (hub=1, loop=0).
+# === FROZEN: Answer extraction and termination logic ===
+# DO NOT MODIFY anything outside the EVOLVE-BLOCK markers.
+# The frozen wrapper ensures correct answer extraction regardless of
+# what the evolution does to the core DAG.
 
-    Three agents in a hub-spoke pattern: Orchestrator (hub) plans and
-    delegates to two parallel Workers (spokes), then synthesizes their
-    outputs into a final answer. No feedback loop — single dispatch.
+ANSWER_INSTRUCTION = (
+    "\n\nCRITICAL OUTPUT FORMAT — you MUST follow this exactly:\n"
+    "When you have the final answer, output exactly:\n"
+    "SOLUTION_FOUND \\\\boxed{your_answer}\n"
+    "Do NOT deviate from this format. The system uses keyword detection\n"
+    "to extract your answer."
+)
+
+TERMINATION_CONDITION = {
+    "type": "keyword",
+    "config": {
+        "any": ["SOLUTION_FOUND"],
+        "none": [],
+        "regex": [],
+        "case_sensitive": True,
+    },
+}
+
+
+# EVOLVE-BLOCK-START
+def _build_core():
+    """Core star topology — evolution can modify this freely.
+
+    Returns dict with keys:
+      - agents: list of agent node dicts (id, role, config)
+      - extra_nodes: optional list of non-agent nodes (e.g. LoopCounter)
+      - edges: list of edge dicts (connections between agents)
+      - introduction: str (introduction content for the literal node)
+      - terminal_agent: str (id of the agent that produces the final answer)
     """
 
     orchestrator_prompt = (
@@ -19,8 +46,7 @@ def build_dag():
         "On your FIRST call: decompose the task and provide clear sub-task "
         "instructions for each Worker.\n"
         "On your SECOND call (after receiving Worker outputs): synthesize "
-        "their results and output:\n"
-        "SOLUTION_FOUND followed by the final answer."
+        "their results."
     )
 
     worker_a_prompt = (
@@ -31,7 +57,7 @@ def build_dag():
         "- Identifying key information and constraints\n"
         "- Providing analytical reasoning\n\n"
         "Be concise and report only your findings. Do NOT produce a final "
-        "answer — that is the Orchestrator's job."
+        "answer — that is the Synthesizer's job."
     )
 
     worker_b_prompt = (
@@ -42,23 +68,23 @@ def build_dag():
         "- Verifying facts and checking work\n"
         "- Providing concrete results\n\n"
         "Be concise and report only your results. Do NOT produce a final "
-        "answer — that is the Orchestrator's job."
+        "answer — that is the Synthesizer's job."
     )
 
-    introduction_content = (
+    synthesizer_prompt = (
+        "You are the Synthesizer. You receive outputs from Worker_A and "
+        "Worker_B. Combine their findings into a single coherent answer."
+    )
+
+    introduction = (
         "Solve the given task using a hub-spoke workflow:\n"
         "1. Orchestrator plans and delegates sub-tasks.\n"
         "2. Worker_A handles analysis and reasoning.\n"
         "3. Worker_B handles computation and verification.\n"
-        "4. Orchestrator synthesizes both outputs into the final answer."
+        "4. Synthesizer combines both outputs into the final answer."
     )
 
-    nodes = [
-        {"id": "USER", "type": "passthrough", "config": {}},
-        {"id": "Introduction", "type": "literal", "config": {
-            "content": introduction_content,
-            "role": "user",
-        }},
+    agents = [
         {"id": "Agent_Orchestrator", "type": "agent",
          "role": orchestrator_prompt,
          "config": {"params": {"temperature": 0.1, "max_tokens": 4096}}},
@@ -69,13 +95,8 @@ def build_dag():
          "role": worker_b_prompt,
          "config": {"params": {"temperature": 0.2, "max_tokens": 4096}}},
         {"id": "Agent_Synthesizer", "type": "agent",
-         "role": (
-             "You are the Synthesizer. You receive outputs from Worker_A and "
-             "Worker_B. Combine their findings into a single coherent answer.\n\n"
-             "Output: SOLUTION_FOUND followed by the final answer."
-         ),
+         "role": synthesizer_prompt,
          "config": {"params": {"temperature": 0.1, "max_tokens": 4096}}},
-        {"id": "FINAL", "type": "passthrough", "config": {}},
     ]
 
     edges = [
@@ -108,11 +129,53 @@ def build_dag():
         # Synthesizer also sees original problem
         {"from": "USER", "to": "Agent_Synthesizer",
          "trigger": False, "condition": "true", "carry_data": True},
-
-        # Synthesizer → FINAL
-        {"from": "Agent_Synthesizer", "to": "FINAL",
-         "trigger": True, "condition": "true", "carry_data": True},
     ]
+
+    return {
+        "agents": agents,
+        "extra_nodes": [],
+        "edges": edges,
+        "introduction": introduction,
+        "terminal_agent": "Agent_Synthesizer",
+    }
+# EVOLVE-BLOCK-END
+
+
+# === FROZEN: DAG assembly with guaranteed termination ===
+
+def build_dag():
+    core = _build_core()
+
+    # Frozen scaffolding nodes
+    nodes = [
+        {"id": "USER", "type": "passthrough", "config": {}},
+        {"id": "Introduction", "type": "literal", "config": {
+            "content": core["introduction"],
+            "role": "user",
+        }},
+    ]
+
+    # Add evolved agent nodes, injecting ANSWER_INSTRUCTION into terminal agent
+    terminal_id = core["terminal_agent"]
+    for agent in core["agents"]:
+        if agent["id"] == terminal_id:
+            agent = {**agent, "role": agent.get("role", "") + ANSWER_INSTRUCTION}
+        nodes.append(agent)
+
+    # Add extra nodes (e.g. LoopCounter)
+    for node in core.get("extra_nodes", []):
+        nodes.append(node)
+
+    # Frozen FINAL node
+    nodes.append({"id": "FINAL", "type": "passthrough", "config": {}})
+
+    # Evolved edges + frozen termination edge
+    edges = list(core["edges"])
+    edges.append({
+        "from": terminal_id, "to": "FINAL",
+        "trigger": True, "carry_data": True,
+        "condition": TERMINATION_CONDITION,
+    })
 
     return {
         "dag_id": "Star_Topology",
@@ -120,11 +183,10 @@ def build_dag():
         "edges": edges,
         "metadata": {
             "description": (
-                "Minimal 3-agent star topology. Orchestrator hub dispatches "
+                "Minimal 4-agent star topology. Orchestrator hub dispatches "
                 "to Worker_A and Worker_B spokes, Synthesizer combines results."
             ),
             "start": ["USER", "Introduction"],
             "success_nodes": ["FINAL"],
         },
     }
-# EVOLVE-BLOCK-END

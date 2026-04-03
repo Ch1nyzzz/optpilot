@@ -16,12 +16,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from optpilot.config import DAG_DIR, RESULTS_DIR
+from optpilot.config import RESULTS_DIR
 from optpilot.dag.core import MASDAG
 from optpilot.data.benchmarks import load_online_benchmark_suite, OfficialBenchmarkSuite
 from optpilot.modules.runner import OptPilotRunner
 
-DAG_FILE = "ag2_mathchat.yaml"
+INITIAL_PROGRAM = Path(__file__).parent / "openevolve_initial_dag.py"
 
 
 def _split_suite(suite: OfficialBenchmarkSuite, n_train: int) -> tuple[list, list]:
@@ -126,8 +126,7 @@ async def run_baseline(
     train_suite = OfficialBenchmarkSuite(train_examples)
     test_suite = OfficialBenchmarkSuite(test_examples)
 
-    dag_file = DAG_DIR / DAG_FILE
-    dag = MASDAG.load(dag_file)
+    dag = MASDAG.from_initial_program(INITIAL_PROGRAM)
     dag.save(dag_versions_dir / "baseline_input.yaml")
     dag.save(dag_versions_dir / "baseline_final.yaml")
 
@@ -150,7 +149,7 @@ async def run_baseline(
     print(f"  AG2 MathChat Baseline — {model_short}")
     print("=" * 65)
     print(f"  Model:       {model}")
-    print(f"  DAG:         {dag.dag_id}  ({dag_file.name})")
+    print(f"  DAG:         {dag.dag_id}  ({INITIAL_PROGRAM.name})")
     print(f"  Agents:      {', '.join(dag.agent_nodes.keys())}")
     print(f"  Concurrency: {concurrency}")
     print(f"  Timeout:     {timeout}s/task")

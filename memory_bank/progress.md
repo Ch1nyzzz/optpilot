@@ -6,7 +6,7 @@
 
 - 两阶段 pipeline 已实现：blind cold-start → prior extraction
 - 多目标 MAS 支持：ag2, agentcoder, simple_star, simple_hier, appworld, hyperagent, magentic
-- 经验存储全局化，通过 DAG 拓扑特征 (has_hub, has_loop) 自动区分
+- 经验存储全局化，通过 DAG 拓扑特征 (has_hub) 自动区分（只分 hub vs no-hub，不分 loop）
 - Official benchmark scoring: MMLU + AIME 2025 + OlympiadBench + HumanEval + GAIA + SWE-bench Lite
 - AgentCoder target 已实现（Programmer → TestDesigner → TestExecutor pipeline）
 
@@ -17,7 +17,7 @@
 - 删除了 merge_experience_by_control_flow.py 和 merge_experience_to_global.py
 - 清理了 config.py 中大量废弃变量（OFFLINE_HINTS_DIR, EVOLVED_SKILLS_DIR, META_EVOLVE_TRACES_DIR 等）
 - 经验存储改为全局 + 拓扑特征自动匹配
-- 修复了 analyze_openevolve_traces.py 蒸馏时不传 has_hub/has_loop 的 bug
+- 修复了 analyze_openevolve_traces.py 蒸馏时不传 has_hub 的 bug
 - 更新了全部文档（CLAUDE.md, AGENTS.md, memory_bank/）
 
 ### 新增 AgentCoder target

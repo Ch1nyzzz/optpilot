@@ -1,9 +1,36 @@
-# EVOLVE-BLOCK-START
-def build_dag():
-    """Minimal linear topology (hub=0, loop=0).
+# === FROZEN: Answer extraction and termination logic ===
+# DO NOT MODIFY anything outside the EVOLVE-BLOCK markers.
+# The frozen wrapper ensures correct answer extraction regardless of
+# what the evolution does to the core DAG.
 
-    Two agents in sequence: Solver generates an answer, Checker verifies
-    and refines it. No hub, no feedback loop — single-pass pipeline.
+ANSWER_INSTRUCTION = (
+    "\n\nCRITICAL OUTPUT FORMAT — you MUST follow this exactly:\n"
+    "When you have the final answer, output exactly:\n"
+    "SOLUTION_FOUND \\\\boxed{your_answer}\n"
+    "Do NOT deviate from this format. The system uses keyword detection\n"
+    "to extract your answer."
+)
+
+TERMINATION_CONDITION = {
+    "type": "keyword",
+    "config": {
+        "any": ["SOLUTION_FOUND"],
+        "none": [],
+        "regex": [],
+        "case_sensitive": True,
+    },
+}
+
+
+# EVOLVE-BLOCK-START
+def _build_core():
+    """Core linear topology — evolution can modify this freely.
+
+    Returns dict with keys:
+      - agents: list of agent node dicts (id, role, config)
+      - edges: list of edge dicts (connections between agents)
+      - introduction: str (introduction content for the literal node)
+      - terminal_agent: str (id of the last agent that produces the answer)
     """
 
     solver_prompt = (
@@ -13,8 +40,7 @@ def build_dag():
         "1. Read the problem carefully and identify what is being asked.\n"
         "2. Think through your approach before answering.\n"
         "3. Show your reasoning clearly.\n"
-        "4. State your final answer explicitly.\n\n"
-        "Output your solution with clear reasoning, then state the final answer."
+        "4. State your final answer explicitly."
     )
 
     checker_prompt = (
@@ -24,30 +50,22 @@ def build_dag():
         "1. Review the Solver's reasoning for logical errors.\n"
         "2. Verify the answer is correct and complete.\n"
         "3. If you find an error, provide the corrected answer.\n"
-        "4. If the answer is correct, confirm it.\n\n"
-        "Output the verified final answer. Format: SOLUTION_FOUND followed by "
-        "the answer."
+        "4. If the answer is correct, confirm it."
     )
 
-    introduction_content = (
+    introduction = (
         "Solve the given problem using a two-agent pipeline:\n"
         "1. Solver works through the problem step by step.\n"
         "2. Checker verifies the solution and produces the final answer."
     )
 
-    nodes = [
-        {"id": "USER", "type": "passthrough", "config": {}},
-        {"id": "Introduction", "type": "literal", "config": {
-            "content": introduction_content,
-            "role": "user",
-        }},
+    agents = [
         {"id": "Agent_Solver", "type": "agent",
          "role": solver_prompt,
          "config": {"params": {"temperature": 0.2, "max_tokens": 4096}}},
         {"id": "Agent_Checker", "type": "agent",
          "role": checker_prompt,
          "config": {"params": {"temperature": 0.1, "max_tokens": 4096}}},
-        {"id": "FINAL", "type": "passthrough", "config": {}},
     ]
 
     edges = [
@@ -66,11 +84,48 @@ def build_dag():
         # Checker also sees original problem for verification
         {"from": "USER", "to": "Agent_Checker",
          "trigger": False, "condition": "true", "carry_data": True},
-
-        # Checker → FINAL
-        {"from": "Agent_Checker", "to": "FINAL",
-         "trigger": True, "condition": "true", "carry_data": True},
     ]
+
+    return {
+        "agents": agents,
+        "edges": edges,
+        "introduction": introduction,
+        "terminal_agent": "Agent_Checker",
+    }
+# EVOLVE-BLOCK-END
+
+
+# === FROZEN: DAG assembly with guaranteed termination ===
+
+def build_dag():
+    core = _build_core()
+
+    # Frozen scaffolding nodes
+    nodes = [
+        {"id": "USER", "type": "passthrough", "config": {}},
+        {"id": "Introduction", "type": "literal", "config": {
+            "content": core["introduction"],
+            "role": "user",
+        }},
+    ]
+
+    # Add evolved agent nodes, injecting ANSWER_INSTRUCTION into terminal agent
+    terminal_id = core["terminal_agent"]
+    for agent in core["agents"]:
+        if agent["id"] == terminal_id:
+            agent = {**agent, "role": agent.get("role", "") + ANSWER_INSTRUCTION}
+        nodes.append(agent)
+
+    # Frozen FINAL node
+    nodes.append({"id": "FINAL", "type": "passthrough", "config": {}})
+
+    # Evolved edges + frozen termination edge
+    edges = list(core["edges"])
+    edges.append({
+        "from": terminal_id, "to": "FINAL",
+        "trigger": True, "carry_data": True,
+        "condition": TERMINATION_CONDITION,
+    })
 
     return {
         "dag_id": "Linear_Topology",
@@ -85,4 +140,3 @@ def build_dag():
             "success_nodes": ["FINAL"],
         },
     }
-# EVOLVE-BLOCK-END

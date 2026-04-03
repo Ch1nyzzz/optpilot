@@ -1,9 +1,39 @@
-# EVOLVE-BLOCK-START
-def build_dag():
-    """Build a simplified 3-agent star topology DAG for GAIA.
+# === FROZEN: Answer extraction and termination logic ===
+# DO NOT MODIFY anything outside the EVOLVE-BLOCK markers.
+# The frozen wrapper ensures correct answer extraction regardless of
+# what the evolution does to the core DAG.
 
-    Star topology with Orchestrator (hub) dispatching to Researcher and Solver
-    (spokes). Bounded 2-iteration feedback loop via explicit LoopCounter.
+ANSWER_INSTRUCTION = (
+    "\n\nCRITICAL OUTPUT FORMAT — you MUST follow this exactly:\n"
+    "When you are confident in the answer, produce exactly:\n"
+    "SOLUTION_FOUND \\\\boxed{answer}\n"
+    "If the problem is unsolvable, return:\n"
+    "SOLUTION_FOUND \\\\boxed{None}\n"
+    "Do NOT deviate from this format. The system uses keyword detection\n"
+    "to extract your answer."
+)
+
+TERMINATION_CONDITION = {
+    "type": "keyword",
+    "config": {
+        "any": ["SOLUTION_FOUND"],
+        "none": [],
+        "regex": [],
+        "case_sensitive": True,
+    },
+}
+
+
+# EVOLVE-BLOCK-START
+def _build_core():
+    """Core star topology — evolution can modify this freely.
+
+    Returns dict with keys:
+      - agents: list of agent node dicts (id, role, config)
+      - extra_nodes: list of non-agent nodes to add (e.g. LoopCounter)
+      - edges: list of edge dicts (connections between agents)
+      - introduction: str (introduction content for the literal node)
+      - terminal_agent: str (id of the agent that produces the final answer)
     """
 
     orchestrator_prompt = (
@@ -11,11 +41,7 @@ def build_dag():
         "Round 1: Read the task carefully. Plan what information is needed and what\n"
         "computation is required. Your output is sent to the Researcher and Solver.\n\n"
         "Round 2 (if triggered): You receive both specialists' outputs. Synthesize\n"
-        "them into the final answer. If they disagree, resolve the conflict.\n\n"
-        "When you are confident in the answer, produce exactly:\n"
-        "SOLUTION_FOUND \\\\boxed{answer}\n"
-        "If the problem is unsolvable, return:\n"
-        "SOLUTION_FOUND \\\\boxed{None}"
+        "them into the final answer. If they disagree, resolve the conflict."
     )
 
     researcher_prompt = (
@@ -34,7 +60,7 @@ def build_dag():
         "Do NOT produce a final boxed answer — that is the Orchestrator's job."
     )
 
-    introduction_content = (
+    introduction = (
         "Solve the user's task using a hub-spoke workflow:\n"
         "1. Orchestrator plans and delegates sub-tasks.\n"
         "2. Researcher gathers relevant information via search.\n"
@@ -43,12 +69,7 @@ def build_dag():
         "The Orchestrator may request another round if the first attempt is insufficient."
     )
 
-    nodes = [
-        {"id": "USER", "type": "passthrough", "config": {}},
-        {"id": "Introduction", "type": "literal", "config": {
-            "content": introduction_content,
-            "role": "user",
-        }},
+    agents = [
         {"id": "Agent_Orchestrator", "type": "agent",
          "role": orchestrator_prompt,
          "config": {"params": {"temperature": 0.1, "max_tokens": 4096}}},
@@ -60,11 +81,13 @@ def build_dag():
          "role": solver_prompt,
          "config": {"params": {"temperature": 0.2, "max_tokens": 4096},
                     "tools": ["calculator", "python_exec"]}},
+    ]
+
+    extra_nodes = [
         {"id": "LoopCounter", "type": "loop_counter", "config": {
             "max_iterations": 2,
             "message": "Star dispatch iteration limit reached.",
         }},
-        {"id": "FINAL", "type": "passthrough", "config": {}},
     ]
 
     edges = [
@@ -101,15 +124,53 @@ def build_dag():
         {"from": "LoopCounter", "to": "Agent_Orchestrator",
          "trigger": True, "condition": "true", "carry_data": True,
          "loop": "exit"},
-
-        # Orchestrator → FINAL (keyword termination)
-        {"from": "Agent_Orchestrator", "to": "FINAL",
-         "trigger": True, "carry_data": True,
-         "condition": {"type": "keyword", "config": {
-             "any": ["SOLUTION_FOUND"],
-             "none": [], "regex": [], "case_sensitive": True,
-         }}},
     ]
+
+    return {
+        "agents": agents,
+        "extra_nodes": extra_nodes,
+        "edges": edges,
+        "introduction": introduction,
+        "terminal_agent": "Agent_Orchestrator",
+    }
+# EVOLVE-BLOCK-END
+
+
+# === FROZEN: DAG assembly with guaranteed termination ===
+
+def build_dag():
+    core = _build_core()
+
+    # Frozen scaffolding nodes
+    nodes = [
+        {"id": "USER", "type": "passthrough", "config": {}},
+        {"id": "Introduction", "type": "literal", "config": {
+            "content": core["introduction"],
+            "role": "user",
+        }},
+    ]
+
+    # Add evolved agent nodes, injecting ANSWER_INSTRUCTION into terminal agent
+    terminal_id = core["terminal_agent"]
+    for agent in core["agents"]:
+        if agent["id"] == terminal_id:
+            agent = {**agent, "role": agent.get("role", "") + ANSWER_INSTRUCTION}
+        nodes.append(agent)
+
+    # Add extra nodes (e.g. LoopCounter)
+    for node in core.get("extra_nodes", []):
+        nodes.append(node)
+
+    # Frozen FINAL node
+    nodes.append({"id": "FINAL", "type": "passthrough", "config": {}})
+
+    # Evolved edges + frozen termination edge
+    edges = list(core["edges"])
+    edges.append({
+        "from": terminal_id, "to": "FINAL",
+        "trigger": True, "carry_data": True,
+        "condition": TERMINATION_CONDITION,
+    })
 
     return {
         "dag_id": "SimpleStarGAIA",
@@ -124,4 +185,3 @@ def build_dag():
             "success_nodes": ["FINAL"],
         },
     }
-# EVOLVE-BLOCK-END

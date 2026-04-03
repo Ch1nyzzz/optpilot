@@ -1,72 +1,75 @@
 # EVOLVE-BLOCK-START
 def build_dag():
-    """Build the HyperAgent-style hierarchical workflow DAG.
+    """Build the HyperAgent-style centralized dispatch (star) DAG.
 
-    Hierarchical: Planner decomposes → Navigator analyzes → Editor solves → Executor verifies.
-    Results flow back up to Planner for final synthesis.
+    Aligned with the original HyperAgent paper:
+    - Planner is the hub that sees the full bug report.
+    - Planner fans out sub-tasks to Navigator, Editor, and Executor simultaneously.
+    - Sub-agents only receive focused sub-tasks, not the full context.
+    - Spoke outputs converge via LoopCounter back to Planner for synthesis.
+    - Bounded 3-iteration loop.
     """
 
     planner_prompt = (
-        "You are the Planner, the top-level orchestrator of a hierarchical workflow.\n\n"
-        "Your responsibilities:\n"
-        "1. Read the user's task and decompose it into clear sub-problems.\n"
-        "2. The Navigator will analyze the problem structure.\n"
-        "3. The Editor will formulate solution approaches.\n"
-        "4. The Executor will verify and compute results.\n"
-        "5. You receive all their outputs and synthesize the final answer.\n\n"
-        "When you have enough information, produce the final answer exactly as:\n"
-        "SOLUTION_FOUND \\\\boxed{answer}\n\n"
-        "If the problem is unsolvable, return:\n"
-        "SOLUTION_FOUND \\\\boxed{None}"
+        "You are the Planner, the top-level orchestrator of a hierarchical code debugging workflow.\n\n"
+        "You have access to the full bug report. Your responsibilities:\n"
+        "1. Analyze the bug report and decompose it into investigation steps.\n"
+        "2. Delegate sub-tasks to your interns one at a time:\n"
+        "   - Navigator: to explore the codebase and locate relevant files.\n"
+        "   - Editor: to implement the fix in specific files.\n"
+        "   - Executor: to run tests and verify the fix.\n"
+        "3. Provide each intern with a focused sub-task description containing\n"
+        "   only the information they need. Do NOT forward the entire bug report.\n"
+        "4. Receive their concise results and synthesize the final answer.\n\n"
+        "When done, describe the fix that was applied.\n"
+        "End with: SOLUTION_FOUND \\\\boxed{fixed}"
     )
 
     navigator_prompt = (
-        "You are the Navigator, responsible for analyzing problem structure.\n\n"
-        "When the Planner delegates a task to you:\n"
-        "1. Identify the mathematical domain and key concepts.\n"
-        "2. Break down the problem into its structural components.\n"
-        "3. Identify relevant theorems, formulas, or approaches.\n"
-        "4. Map out dependencies between sub-problems.\n\n"
-        "Provide a clear structural analysis to guide the Editor.\n"
-        "Do not produce a final boxed answer — that is the Planner's job."
+        "You are the Navigator, an intern reporting to the Planner.\n\n"
+        "You receive a focused sub-task from the Planner — only focus on what\n"
+        "the Planner asks. The Planner sees the whole picture; you do not.\n\n"
+        "Your job:\n"
+        "1. Use list_files and search_code to find relevant source files.\n"
+        "2. Use read_file to examine the code around the area the Planner specified.\n"
+        "3. Identify the root cause within the scope of your sub-task.\n\n"
+        "Return a concise summary (under 500 words) of:\n"
+        "- Which files and lines are relevant\n"
+        "- What the root cause is\n"
+        "Do not produce a final answer — that is the Planner's job."
     )
 
     editor_prompt = (
-        "You are the Editor, responsible for formulating solution approaches.\n\n"
-        "You receive the Navigator's structural analysis and the original problem.\n"
+        "You are the Editor, an intern reporting to the Planner.\n\n"
+        "You receive a focused sub-task from the Planner with specific files\n"
+        "and changes to make. Only focus on the Planner's instructions.\n\n"
         "Your job:\n"
-        "1. For each identified sub-problem, formulate a concrete solution approach.\n"
-        "2. Work through the mathematical reasoning step by step.\n"
-        "3. Produce intermediate results that the Executor can verify.\n"
-        "4. Be explicit about each computation step.\n\n"
-        "Provide your detailed solution work to the Executor for verification.\n"
-        "Do not produce a final boxed answer — that is the Planner's job."
+        "1. Use read_file to see the exact code that needs changing.\n"
+        "2. Use edit_file to apply the fix (find old_str, replace with new_str).\n"
+        "3. Be precise — match the exact text in the file.\n\n"
+        "Return a concise summary (under 300 words) of what you changed and why.\n"
+        "Do not produce a final answer — that is the Planner's job."
     )
 
     executor_prompt = (
-        "You are the Executor, responsible for verification and final computation.\n\n"
-        "You receive the Editor's solution work and the original problem.\n"
+        "You are the Executor, an intern reporting to the Planner.\n\n"
+        "You receive a focused sub-task from the Planner — typically to run\n"
+        "specific tests or verify changes. Only focus on the Planner's request.\n\n"
         "Your job:\n"
-        "1. Verify each computation step for correctness.\n"
-        "2. Use Python code to independently verify key calculations:\n"
-        "   ```python\n"
-        "   # your code here\n"
-        "   print(result)\n"
-        "   ```\n"
-        "3. Check boundary conditions and edge cases.\n"
-        "4. Confirm or correct the Editor's results.\n\n"
-        "Report your verification results back to the Planner.\n"
-        "Do not produce a final boxed answer — that is the Planner's job."
+        "1. Use run_command to run the tests the Planner specified.\n"
+        "2. Use read_file to verify changes if needed.\n\n"
+        "Return a concise summary (under 300 words):\n"
+        "- TESTS_PASS if all tests pass, or TESTS_FAIL with error details.\n"
+        "Do not produce a final answer — that is the Planner's job."
     )
 
     introduction_content = (
-        "We solve the user's task using a hierarchical decomposition workflow:\n\n"
-        "1. Planner reads the task and decomposes it into sub-problems.\n"
-        "2. Navigator analyzes the problem structure and identifies key components.\n"
-        "3. Editor formulates the solution approach for each sub-problem.\n"
-        "4. Executor verifies and computes the final answer.\n"
-        "5. Planner synthesizes all results into the final answer.\n\n"
-        "The Planner orchestrates. Sub-agents work on delegated sub-tasks."
+        "Fix the reported bug using a hierarchical delegation workflow:\n"
+        "1. Planner reads the bug report and decomposes it into sub-tasks.\n"
+        "2. Planner delegates one sub-task at a time to Navigator, Editor, or Executor.\n"
+        "3. Navigator locates relevant code. Editor implements the fix. Executor runs tests.\n"
+        "4. Each sub-agent returns a concise summary of its results.\n"
+        "5. Planner synthesizes all results into the final answer."
     )
 
     nodes = [
@@ -77,47 +80,69 @@ def build_dag():
         }},
         {"id": "Agent_Planner", "type": "agent",
          "role": planner_prompt,
-         "config": {"params": {"temperature": 0.1, "max_tokens": 16384},
+         "config": {"params": {"temperature": 0.1, "max_tokens": 4096},
                     "tools": ["list_files", "search_code", "read_file"]}},
         {"id": "Agent_Navigator", "type": "agent",
          "role": navigator_prompt,
-         "config": {"params": {"temperature": 0.2, "max_tokens": 16384},
+         "config": {"params": {"temperature": 0.2, "max_tokens": 4096},
                     "tools": ["list_files", "search_code", "read_file"]}},
         {"id": "Agent_Editor", "type": "agent",
          "role": editor_prompt,
-         "config": {"params": {"temperature": 0.2, "max_tokens": 16384},
+         "config": {"params": {"temperature": 0.2, "max_tokens": 4096},
                     "tools": ["read_file", "edit_file", "search_code"]}},
         {"id": "Agent_Executor", "type": "agent",
          "role": executor_prompt,
-         "config": {"params": {"temperature": 0.1, "max_tokens": 16384},
+         "config": {"params": {"temperature": 0.1, "max_tokens": 4096},
                     "tools": ["run_command", "read_file"]}},
+        {"id": "LoopCounter", "type": "loop_counter", "config": {
+            "max_iterations": 3,
+            "message": "Hierarchical delegation iteration limit reached.",
+        }},
         {"id": "FINAL", "type": "passthrough", "config": {}},
     ]
 
     edges = [
-        # Context: USER task to all agents (non-trigger)
+        # USER context ONLY to Planner (the sole orchestrator)
         {"from": "USER", "to": "Agent_Planner",
-         "trigger": False, "condition": "true", "carry_data": True},
-        {"from": "USER", "to": "Agent_Navigator",
-         "trigger": False, "condition": "true", "carry_data": True},
-        {"from": "USER", "to": "Agent_Editor",
-         "trigger": False, "condition": "true", "carry_data": True},
-        {"from": "USER", "to": "Agent_Executor",
          "trigger": False, "condition": "true", "carry_data": True},
 
         # Introduction triggers Planner
         {"from": "Introduction", "to": "Agent_Planner",
          "trigger": True, "condition": "true", "carry_data": True},
 
-        # Hierarchical chain: Planner → Navigator → Editor → Executor → Planner
+        # Star dispatch: Planner fans out to all sub-agents
         {"from": "Agent_Planner", "to": "Agent_Navigator",
          "trigger": True, "condition": "true", "carry_data": True},
+        {"from": "Agent_Planner", "to": "Agent_Editor",
+         "trigger": True, "condition": "true", "carry_data": True},
+        {"from": "Agent_Planner", "to": "Agent_Executor",
+         "trigger": True, "condition": "true", "carry_data": True},
+
+        # Data flow between spokes (Navigator informs Editor/Executor)
         {"from": "Agent_Navigator", "to": "Agent_Editor",
-         "trigger": True, "condition": "true", "carry_data": True},
+         "trigger": False, "condition": "true", "carry_data": True},
+        {"from": "Agent_Navigator", "to": "Agent_Executor",
+         "trigger": False, "condition": "true", "carry_data": True},
         {"from": "Agent_Editor", "to": "Agent_Executor",
+         "trigger": False, "condition": "true", "carry_data": True},
+
+        # Spoke convergence → LoopCounter
+        {"from": "Agent_Executor", "to": "LoopCounter",
          "trigger": True, "condition": "true", "carry_data": True},
-        {"from": "Agent_Executor", "to": "Agent_Planner",
-         "trigger": True, "condition": "true", "carry_data": True},
+        {"from": "Agent_Navigator", "to": "LoopCounter",
+         "trigger": False, "condition": "true", "carry_data": True},
+        {"from": "Agent_Editor", "to": "LoopCounter",
+         "trigger": False, "condition": "true", "carry_data": True},
+
+        # Loop continue: re-trigger Planner with all sub-agent results
+        {"from": "LoopCounter", "to": "Agent_Planner",
+         "trigger": True, "condition": "true", "carry_data": True,
+         "loop": "continue"},
+
+        # Loop exit: force Planner to produce final answer
+        {"from": "LoopCounter", "to": "Agent_Planner",
+         "trigger": True, "condition": "true", "carry_data": True,
+         "loop": "exit"},
 
         # Planner final → FINAL
         {"from": "Agent_Planner", "to": "FINAL",
@@ -134,8 +159,8 @@ def build_dag():
         "edges": edges,
         "metadata": {
             "description": (
-                "HyperAgent-style hierarchical workflow. Planner decomposes, "
-                "Navigator analyzes, Editor solves, Executor verifies."
+                "HyperAgent-style centralized dispatch (star) topology. Planner is the hub "
+                "that fans out sub-tasks to Navigator/Editor/Executor simultaneously."
             ),
             "start": ["USER", "Introduction"],
             "success_nodes": ["FINAL"],

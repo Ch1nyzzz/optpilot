@@ -98,7 +98,7 @@ analyze_openevolve_traces.py:
   3. 在 held-out test set 上后验评估（防 overfit）
   4. 只保留 test 也提升的 "真正有效" mutation
   5. diff DAG → infer_observed_pattern_from_dags() 分类
-  6. 从 DAG 自动提取拓扑特征 (has_hub, has_loop)
+  6. 从 DAG 自动提取拓扑特征 (has_hub)
   7. 输出:
      - data_driven_priors.json → Jacobian warmup
      - jacobian_warmup.jsonl → 带拓扑特征的经验记录
@@ -117,11 +117,11 @@ analyze_openevolve_traces.py:
 
 经验存储在全局 `library_store/` 目录下，**不按 target MAS 或 control flow 分目录**。
 
-拓扑区分通过自动检测实现：
-- `MASDAG.extract_topology_features()` 从 DAG 结构自动检测 `has_hub` 和 `has_loop`
+拓扑区分通过自动检测实现（只区分 hub vs no-hub，不区分 loop）：
+- `MASDAG.extract_topology_features()` 从 DAG 结构自动检测 `has_hub`
   - `has_hub`: 某个 agent 的传递出度（经 trigger edge）≥ 半数其他 agent
-  - `has_loop`: 存在 `loop_counter` 节点或 `loop:` 边标注
-- `FailureSignature.signature_key()` = `"B:hub=0:loop=1"` — 不同拓扑自然分到不同 Jacobian 行
+  - Loop 不跟踪：进化会自动添加 loop，不需要预先区分
+- `FailureSignature.signature_key()` = `"B:hub=0"` — hub vs no-hub 分到不同 Jacobian 行
 - 新增 target MAS 无需手动映射，拓扑特征自动匹配已有经验
 
 经验层级：

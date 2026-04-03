@@ -19,7 +19,6 @@ TOGETHER_BASE_URL = "https://api.together.xyz/v1"
 
 # Models
 SYSTEM_MODEL = os.environ.get("OPTPILOT_SYSTEM_MODEL", "MiniMaxAI/MiniMax-M2.5")
-JUDGE_MODEL = os.environ.get("OPTPILOT_JUDGE_MODEL", "zai-org/GLM-5")
 TARGET_MODEL = os.environ.get("OPTPILOT_TARGET_MODEL", "MiniMaxAI/MiniMax-M2.5")
 
 # LLM rate limiting
@@ -40,31 +39,10 @@ LLM_MINIMAX_M2_5_MAX_CONCURRENCY = int(
 
 # Worker defaults
 DIAGNOSER_MAX_WORKERS = int(os.environ.get("OPTPILOT_DIAGNOSER_MAX_WORKERS", "64"))
-OFFLINE_YAML_MAX_WORKERS = int(
-    os.environ.get("OPTPILOT_OFFLINE_YAML_MAX_WORKERS", str(DIAGNOSER_MAX_WORKERS))
-)
 
-# Agentic budgets
-SKILL_EVOLVE_MAX_TOKENS = int(
-    os.environ.get("OPTPILOT_SKILL_EVOLVE_MAX_TOKENS", "16384")
-)
-SKILL_EVOLVE_NUM_CANDIDATES = int(
-    os.environ.get("OPTPILOT_SKILL_EVOLVE_NUM_CANDIDATES", "1")
-)
+# Jacobian configuration
 JACOBIAN_TOP_K_PATTERNS = int(
     os.environ.get("OPTPILOT_JACOBIAN_TOP_K_PATTERNS", "3")
-)
-SKILL_EVOLVE_MAX_TURNS = int(
-    os.environ.get("OPTPILOT_SKILL_EVOLVE_MAX_TURNS", "30")
-)
-META_EVOLVE_MAX_TOKENS = int(
-    os.environ.get("OPTPILOT_META_EVOLVE_MAX_TOKENS", "32768")
-)
-META_EVOLVE_MAX_TURNS = int(
-    os.environ.get("OPTPILOT_META_EVOLVE_MAX_TURNS", "30")
-)
-META_EVOLVE_FAILURE_THRESHOLD = int(
-    os.environ.get("OPTPILOT_META_EVOLVE_FAILURE_THRESHOLD", "3")
 )
 JACOBIAN_PATTERN_FAILURE_COOLDOWN_THRESHOLD = int(
     os.environ.get("OPTPILOT_JACOBIAN_PATTERN_FAILURE_COOLDOWN_THRESHOLD", "2")
@@ -75,77 +53,24 @@ JACOBIAN_PATTERN_COOLDOWN_ROUNDS = int(
 JACOBIAN_APPLIED_DECAY = float(
     os.environ.get("OPTPILOT_JACOBIAN_APPLIED_DECAY", "0.3")
 )
-ONLINE_EVAL_RANDOM_SEED = int(
-    os.environ.get("OPTPILOT_ONLINE_EVAL_RANDOM_SEED", "42")
-)
-SHADOW_EVAL_INTERVAL = int(
-    os.environ.get("OPTPILOT_SHADOW_EVAL_INTERVAL", "5")
-)
-SHADOW_META_EVOLVE_THRESHOLD = int(
-    os.environ.get("OPTPILOT_SHADOW_META_EVOLVE_THRESHOLD", "3")
-)
-FAILURE_EXAMPLE_TARGET = int(
-    os.environ.get("OPTPILOT_FAILURE_EXAMPLE_TARGET", "20")
-)
 
 # Paths
-MAST_DATA_CACHE = Path.home() / ".cache/huggingface/hub/datasets--mcemri--MAST-Data/snapshots"
 RESULTS_DIR = _PROJECT_ROOT / "results"
 LIBRARY_DIR = _PROJECT_ROOT / "library_store"
-OFFLINE_HINTS_DIR = LIBRARY_DIR / "offline_hints"
-OFFLINE_SKILLS_DIR = LIBRARY_DIR / "offline_skills"
-ONLINE_HINTS_DIR = LIBRARY_DIR / "online_hints"
-ONLINE_SKILLS_DIR = LIBRARY_DIR / "online_skills"
-DAG_DIR = _PROJECT_ROOT / "dags"            # MASDAG definition files
-EVOLVED_SKILLS_DIR = LIBRARY_DIR / "evolved_skills"
+DAG_DIR = _PROJECT_ROOT / "dags"
 NEGATIVES_DIR = LIBRARY_DIR / "negatives"
 JACOBIAN_DIR = LIBRARY_DIR / "jacobian"
+RECIPES_DIR = LIBRARY_DIR / "recipes"
+CATALOG_PATH = LIBRARY_DIR / "pattern_catalog.json"
 PROJECT_ROOT = _PROJECT_ROOT
+
+# Experience is stored globally. Topology differentiation is handled by
+# FailureSignature embedding has_hub into the Jacobian row key
+# (auto-detected from DAG structure via MASDAG.extract_topology_features()).
 
 RESULTS_DIR.mkdir(exist_ok=True)
 LIBRARY_DIR.mkdir(exist_ok=True)
-OFFLINE_HINTS_DIR.mkdir(parents=True, exist_ok=True)
-OFFLINE_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-ONLINE_HINTS_DIR.mkdir(parents=True, exist_ok=True)
-ONLINE_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-EVOLVED_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 NEGATIVES_DIR.mkdir(parents=True, exist_ok=True)
 JACOBIAN_DIR.mkdir(parents=True, exist_ok=True)
+RECIPES_DIR.mkdir(parents=True, exist_ok=True)
 DAG_DIR.mkdir(exist_ok=True)
-
-
-# -- Topology-aware path helpers ------------------------------------------
-
-def topology_library_dir(topology: str) -> Path:
-    """Return per-topology library_store subdirectory, creating it if needed."""
-    d = LIBRARY_DIR / topology
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def topology_jacobian_dir(topology: str) -> Path:
-    d = topology_library_dir(topology) / "jacobian"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def topology_negatives_dir(topology: str) -> Path:
-    d = topology_library_dir(topology) / "negatives"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def topology_catalog_path(topology: str) -> Path:
-    return topology_library_dir(topology) / "pattern_catalog.json"
-
-
-def topology_recipes_dir(topology: str) -> Path:
-    d = topology_library_dir(topology) / "recipes"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def topology_meta_evolve_traces_dir(topology: str) -> Path:
-    d = topology_library_dir(topology) / "meta_evolve_traces"
-    d.mkdir(parents=True, exist_ok=True)
-    return d

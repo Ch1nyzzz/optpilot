@@ -24,7 +24,6 @@ from optpilot.config import LIBRARY_DIR
 
 if TYPE_CHECKING:
     from optpilot.models import FMProfile
-    from optpilot.skills.tools import ChangeRecord
 
 
 # ------------------------------------------------------------------ #
@@ -35,28 +34,39 @@ if TYPE_CHECKING:
 class FailureSignature:
     """Structured failure descriptor used by the online recommender.
 
-    The online Jacobian row key is intentionally coarse: only ``fm_group``.
+    The Jacobian row key embeds the ``has_hub`` topology feature so that
+    hub vs non-hub topology families naturally occupy different rows in a
+    single global Jacobian matrix.
+
     ``dag_component`` and ``agent`` are retained as optional metadata for
     diagnostics and offline analysis, but they do not affect online lookup.
     """
 
-    fm_group: str = ""      # "A"-"F"
+    fm_group: str = ""       # "A"-"F"
     dag_component: str = ""  # optional metadata only
     agent: str = ""          # optional metadata only
+    has_hub: bool = False    # topology feature
 
     def signature_key(self) -> str:
-        """Key used as the row index in the Jacobian matrix."""
-        return self.fm_group
+        """Key used as the row index in the Jacobian matrix.
+
+        Format: ``"D:hub=0"`` — embeds topology feature so different
+        topology families have separate experience rows.
+        """
+        return f"{self.fm_group}:hub={int(self.has_hub)}"
 
 
 def extract_failure_signatures(
     fm_group: str,
     profiles: list[FMProfile],
+    *,
+    has_hub: bool = False,
 ) -> list[FailureSignature]:
     """Extract FailureSignatures from profiles for a given FM group.
 
-    The online recommender is FM-group keyed. Localization-derived metadata is
-    retained when available, but it does not change the row key.
+    The ``has_hub`` topology feature is injected by the caller (Orchestrator)
+    and embedded into every signature so the Jacobian can maintain
+    per-topology experience rows.
     """
     signatures: list[FailureSignature] = []
     for profile in profiles:
@@ -67,12 +77,14 @@ def extract_failure_signatures(
             signatures.append(FailureSignature(
                 fm_group=fm_group,
                 dag_component="other",
+                has_hub=has_hub,
             ))
             continue
         signatures.append(FailureSignature(
             fm_group=fm_group,
             dag_component=loc.dag_component or "other",
             agent=loc.agent or "",
+            has_hub=has_hub,
         ))
     return signatures
 
@@ -368,6 +380,58 @@ CHANGE_TYPES: dict[str, str] = {
     "loop_adjust": "Changed loop configuration (max_iterations, exit conditions)",
     "literal_update": "Changed literal/introduction content",
 }
+
+_CHANGE_TYPE_TARGET_COMPONENTS: dict[str, list[str]] = {
+    "prompt_refine": ["agent_prompt"],
+    "topology_change": ["agent_prompt", "node_config", "other"],
+    "edge_route": ["edge_carry_data", "edge_condition", "edge_missing"],
+    "config_tune": ["node_config"],
+    "loop_adjust": ["loop_config", "edge_condition"],
+    "literal_update": ["literal"],
+}
+
+_LEGACY_PATTERN_TO_CHANGE_TYPE: dict[str, str] = {
+    "prompt_add_constraint": "prompt_refine",
+    "prompt_add_step_by_step": "prompt_refine",
+    "prompt_strengthen_verification": "prompt_refine",
+    "prompt_narrow_role": "prompt_refine",
+    "edge_fix_carry_data": "edge_route",
+    "edge_add_context_propagation": "edge_route",
+    "edge_add_condition": "edge_route",
+    "edge_add_missing": "edge_route",
+    "topo_add_verification_node": "topology_change",
+    "topo_split_agent": "topology_change",
+    "loop_fix_config": "loop_adjust",
+    "loop_add_retry": "loop_adjust",
+    "config_adjust_params": "config_tune",
+}
+
+_CHANGE_TYPE_DIRECTIONS: dict[str, RepairPattern] = {
+    change_type: RepairPattern(
+        pattern_id=change_type,
+        name=change_type.replace("_", " ").title(),
+        description=description,
+        target_components=_CHANGE_TYPE_TARGET_COMPONENTS.get(change_type, []),
+    )
+    for change_type, description in CHANGE_TYPES.items()
+}
+
+
+def normalize_repair_direction_id(direction_id: str) -> str:
+    """Map legacy pattern IDs onto the canonical observable change families."""
+    if direction_id in CHANGE_TYPES:
+        return direction_id
+    return _LEGACY_PATTERN_TO_CHANGE_TYPE.get(direction_id, direction_id)
+
+
+def get_change_family_direction(change_type: str) -> RepairPattern | None:
+    """Return the canonical coarse repair direction for a change family."""
+    return _CHANGE_TYPE_DIRECTIONS.get(change_type)
+
+
+def change_family_items() -> list[tuple[str, RepairPattern]]:
+    """Return the coarse Jacobian recommendation space in stable order."""
+    return [(change_type, _CHANGE_TYPE_DIRECTIONS[change_type]) for change_type in CHANGE_TYPES]
 
 
 # ------------------------------------------------------------------ #

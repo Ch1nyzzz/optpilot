@@ -1,6 +1,5 @@
-# OpenEvolve config for AG2 MathChat DAG evolution (Python code mode)
-# Aligned with MAST blog: 50 iterations, MAST-based fitness
-# Evolves Python code (build_dag function) instead of raw YAML
+# AdaEvolve config for MAS DAG evolution (Python code mode)
+# Adaptive multi-island search with UCB island selection + intensity adaptation.
 
 max_iterations: 50
 checkpoint_interval: 5
@@ -17,20 +16,46 @@ llm:
   timeout: 120
 
 search:
-  type: "openevolve_native"
+  type: "adaevolve"
   num_context_programs: 4
   database:
     num_islands: 3
     population_size: 20
     archive_size: 3
-    exploration_ratio: 0.2
-    exploitation_ratio: 0.7
-    elite_selection_ratio: 0.1
+
+    # Adaptive intensity (G-based)
+    decay: 0.9
+    intensity_min: 0.1
+    intensity_max: 0.7
+
+    # UCB island selection
+    use_adaptive_search: true
+    use_ucb_selection: true
+
+    # Migration (ring topology)
+    use_migration: true
+    migration_interval: 10
+    migration_count: 3
+
+    # Quality-diversity archive per island
+    use_unified_archive: true
     feature_dimensions: ["score", "complexity"]
     feature_bins: 10
     diversity_reference_size: 20
-    migration_interval: 10
-    migration_rate: 0.1
+
+    # Paradigm breakthrough (high-level strategy shifts when stuck)
+    use_paradigm_breakthrough: true
+    paradigm_window_size: 30
+    paradigm_improvement_threshold: 0.05
+    paradigm_max_uses: 5
+    paradigm_max_tried: 10
+    paradigm_num_to_generate: 3
+
+    # Dynamic island spawning (disabled by default)
+    use_dynamic_islands: false
+    max_islands: 8
+    spawn_productivity_threshold: 0.02
+
     random_seed: 42
 
 prompt:
