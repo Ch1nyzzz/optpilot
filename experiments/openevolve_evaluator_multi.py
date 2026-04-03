@@ -36,10 +36,25 @@ _TOTAL_TASKS = int(os.environ.get("OPENEVOLVE_TOTAL_TASKS", "200"))
 _EVAL_PROMPTS_JSON = os.environ.get("OPENEVOLVE_EVAL_PROMPTS_JSON", "")
 _TARGET_MAS = os.environ.get("OPENEVOLVE_TARGET_MAS", "ag2")
 _BENCHMARK = os.environ.get("OPENEVOLVE_BENCHMARK", "")  # topology×benchmark mode
+_GAIA_SUPPORTED_ONLY = os.environ.get("OPENEVOLVE_GAIA_SUPPORTED_ONLY", "").lower() == "strict"
 _USE_PRIORS_RAW = os.environ.get("OPENEVOLVE_USE_PRIORS", "").lower()
 _USE_PRIORS_ALWAYS = _USE_PRIORS_RAW in ("1", "true", "yes")
 _USE_PRIORS_ALTERNATE = _USE_PRIORS_RAW == "alternate"
+_SKIP_DIAGNOSE = os.environ.get("OPENEVOLVE_SKIP_DIAGNOSE", "").lower() in ("1", "true", "yes")
 _eval_counter = 0
+
+# Meta-diagnoser state
+# Threshold is per-evaluation call, not per-iteration.
+# With max_parallel_iterations=3, 15 evals ≈ 5 iterations of stagnation.
+_META_STAGNATION_THRESHOLD = 15
+# Direct Together client calls expect bare model ids, not SkyDiscover's
+# provider-prefixed "together/..." form.
+_META_MODEL = "zai-org/GLM-5"
+_meta_best_score: float = 0.0
+_meta_best_code: str = ""  # source code of the best program
+_meta_best_task_results: dict[str, dict] = {}  # task_hash -> {score, output_snippet}
+_meta_stagnation_count: int = 0
+_meta_recent_mutations: list[dict] = []  # last few mutations' task results
 
 # Lazy globals
 _suite: OfficialBenchmarkSuite | None = None
@@ -120,7 +135,10 @@ def _load_magentic():
     from optpilot.data.benchmarks_gaia import load_gaia_examples, score_gaia
     from optpilot.tools.magentic_tools import GeneralEnvironment, build_tools
 
-    examples = load_gaia_examples(_TOTAL_TASKS)
+    examples = load_gaia_examples(
+        _TOTAL_TASKS,
+        strict_supported_only=_GAIA_SUPPORTED_ONLY,
+    )
     suite = OfficialBenchmarkSuite(examples)
     example_lookup = {ex.prompt: ex for ex in examples}
 
@@ -144,7 +162,32 @@ def _load_magentic():
 
 
 def _load_agentcoder():
-    """Load LiveCodeBench benchmark with code execution tools."""
+    """Load HumanEval benchmark with code execution tools."""
+    from optpilot.data.benchmarks_humaneval import load_humaneval_examples, score_humaneval
+    from optpilot.tools.agentcoder_tools import CodeExecutionEnvironment, build_tools
+
+    examples = load_humaneval_examples(_TOTAL_TASKS)
+    suite = OfficialBenchmarkSuite(examples)
+    example_lookup = {ex.prompt: ex for ex in examples}
+
+    def tool_setup(task_prompt: str):
+        return build_tools(CodeExecutionEnvironment())
+
+    def score_fn(task_prompt, dag, exec_trace):
+        ex = example_lookup.get(task_prompt)
+        if ex is None:
+            return 0.0
+        pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+        return score_humaneval(pred, ex)
+
+    def bench_resolver(task_prompt):
+        return "HumanEval"
+
+    return suite, score_fn, bench_resolver, tool_setup
+
+
+def _load_livecodebench():
+    """Load LiveCodeBench with code-execution scoring."""
     from optpilot.data.benchmarks_livecodebench import load_livecodebench_examples, score_livecodebench
     from optpilot.tools.agentcoder_tools import CodeExecutionEnvironment, build_tools
 
@@ -197,14 +240,16 @@ _LOADERS = {
     "simple_star": _load_magentic,    # reuses GAIA benchmark + magentic tools
     "simple_hier": _load_hyperagent,  # reuses SWE-bench + hyperagent tools
     "agentcoder": _load_agentcoder,   # HumanEval + code execution tools
+    "livecodebench": _load_livecodebench,  # LiveCodeBench + code execution
 }
 
 # Benchmark-only loaders (for topology × benchmark mode)
 _BENCHMARK_LOADERS = {
     "math": _load_ag2,
-    "livecodebench": _load_agentcoder,
+    "humaneval": _load_agentcoder,
     "gaia": _load_magentic,
     "swebench": _load_hyperagent,
+    "livecodebench": _load_livecodebench,
 }
 
 
@@ -425,7 +470,7 @@ def _init_globals() -> None:
         timeout=_TIMEOUT,
         tool_setup_fn=tool_setup,
     )
-    _diagnoser = Diagnoser()
+    _diagnoser = None if _SKIP_DIAGNOSE else Diagnoser()
 
 
 async def _classify_batch(traces: list) -> list:
@@ -455,10 +500,273 @@ async def _classify_batch(traces: list) -> list:
     return [results[i] for i in range(len(traces))]
 
 
+def _meta_diagnose_and_repair(
+    current_task_results: dict[str, dict],
+    current_score: float,
+    current_dag: "MASDAG",
+    current_traces: list,
+) -> tuple[str, bool]:
+    """Meta-diagnoser: analyze stagnation, then directly repair the best code.
+
+    Returns (feedback_text, repaired_bool).
+    If repair succeeds and scores better, updates _meta_best_* globals.
+    """
+    global _meta_best_score, _meta_best_code, _meta_best_task_results
+
+    if not _meta_best_code:
+        return "", False
+
+    # --- 1. Collect diagnosis context ---
+    regressions = []
+    for task_hash, best_info in _meta_best_task_results.items():
+        curr_info = current_task_results.get(task_hash)
+        if curr_info and best_info["score"] > 0 and curr_info["score"] <= 0:
+            regressions.append((task_hash, best_info, curr_info))
+
+    best_correct = sum(1 for v in _meta_best_task_results.values() if v["score"] > 0)
+
+    # Frequently regressed tasks across recent mutations
+    regression_counts: dict[str, int] = {}
+    for mutation in _meta_recent_mutations[-10:]:
+        for task_hash in mutation.get("task_results", {}):
+            best_info = _meta_best_task_results.get(task_hash)
+            curr_info = mutation["task_results"][task_hash]
+            if best_info and best_info["score"] > 0 and curr_info["score"] <= 0:
+                snippet = best_info["prompt_snippet"][:60]
+                regression_counts[snippet] = regression_counts.get(snippet, 0) + 1
+
+    # Build failure trace excerpts for wrong tasks in the best
+    failure_excerpts = []
+    for task_hash, info in _meta_best_task_results.items():
+        if info["score"] <= 0 and info.get("trace_excerpt"):
+            failure_excerpts.append(
+                f"Task: {info['prompt_snippet']}\n"
+                f"Output: {info['output_snippet']}\n"
+                f"FM: {', '.join(info.get('fm_labels', []))}\n"
+                f"Trace:\n{info['trace_excerpt']}"
+            )
+    # Keep top 3 failures by length (more trace = more informative)
+    failure_excerpts.sort(key=len, reverse=True)
+    failure_context = "\n---\n".join(failure_excerpts[:3])
+
+    recent_scores = [round(m["score"], 3) for m in _meta_recent_mutations[-10:]]
+
+    # --- 2. Ask GLM-5 to directly modify the code ---
+    system_prompt = """\
+You are a meta-diagnoser for a multi-agent system (MAS) evolution loop.
+
+The evolution has STAGNATED. You are given:
+1. The current best `_build_core()` source code
+2. Failure traces from tasks the best DAG got wrong
+3. Regression data showing which tasks recent mutations keep breaking
+
+Your job: DIRECTLY MODIFY the `_build_core()` function to fix the most impactful issue.
+
+Rules:
+- Output the COMPLETE modified `_build_core()` function (including the EVOLVE-BLOCK markers)
+- Keep changes MINIMAL and TARGETED — do not rewrite everything
+- Focus on fixing tasks the best DAG got WRONG, without breaking tasks it got RIGHT
+- The frozen wrapper (outside EVOLVE-BLOCK) handles: ANSWER_INSTRUCTION injection,
+  TERMINATION_CONDITION (SOLUTION_FOUND keyword), USER/FINAL nodes, and the edge to FINAL.
+  Do NOT add these yourself.
+- `terminal_agent` must be a valid agent id — the wrapper appends answer format to it
+- All edge from/to must reference agent ids in `agents` list, or `USER`, `Introduction`,
+  or ids in `extra_nodes`
+
+Output format:
+```python
+# EVOLVE-BLOCK-START
+def _build_core():
+    ... your modified code ...
+# EVOLVE-BLOCK-END
+```
+
+Think step by step about what to change, then output the complete function."""
+
+    freq_regressions = dict(sorted(regression_counts.items(), key=lambda x: x[1], reverse=True)[:3]) if regression_counts else "none"
+    failure_ctx = failure_context[:3000] if failure_context else "(no trace excerpts available)"
+
+    user_msg = (
+        f"## Current best code (score: {_meta_best_score:.4f}, {best_correct}/20 correct):\n\n"
+        f"```python\n{_meta_best_code}\n```\n\n"
+        f"## Stagnation data:\n"
+        f"- {_meta_stagnation_count} consecutive non-improving evaluations\n"
+        f"- Recent scores: {recent_scores}\n"
+        f"- Frequently regressed tasks across mutations: {freq_regressions}\n\n"
+        f"## Failure traces from tasks the best DAG got WRONG:\n"
+        f"{failure_ctx}\n\n"
+        f"Now modify the `_build_core()` function to improve accuracy. Output the COMPLETE function."
+    )
+
+    try:
+        from optpilot.llm import call_llm
+        llm_response = call_llm(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg},
+            ],
+            model=_META_MODEL,
+            max_tokens=4096,
+            temperature=0.3,
+        )
+    except Exception as e:
+        return f"\n=== META-DIAGNOSIS: LLM call failed: {e} ===", False
+
+    # --- 3. Extract code and evaluate ---
+    import re
+    code_match = re.search(
+        r"```python\s*\n(# EVOLVE-BLOCK-START.*?# EVOLVE-BLOCK-END)",
+        llm_response,
+        re.DOTALL,
+    )
+    if not code_match:
+        # Try without markers
+        code_match = re.search(r"```python\s*\n(.*?)```", llm_response, re.DOTALL)
+
+    if not code_match:
+        return "\n=== META-DIAGNOSIS: Could not extract code from LLM response ===", False
+
+    repaired_code = code_match.group(1).strip()
+
+    # Reconstruct full file: frozen prefix + repaired evolve block + frozen suffix
+    # Split original best code at EVOLVE-BLOCK markers
+    best = _meta_best_code
+    start_marker = "# EVOLVE-BLOCK-START"
+    end_marker = "# EVOLVE-BLOCK-END"
+    start_idx = best.find(start_marker)
+    end_idx = best.find(end_marker)
+
+    if start_idx < 0 or end_idx < 0:
+        return "\n=== META-DIAGNOSIS: Could not find EVOLVE-BLOCK in best code ===", False
+
+    frozen_prefix = best[:start_idx]
+    frozen_suffix = best[end_idx + len(end_marker):]
+
+    # Ensure repaired code has markers
+    if start_marker not in repaired_code:
+        repaired_code = f"{start_marker}\n{repaired_code}"
+    if end_marker not in repaired_code:
+        repaired_code = f"{repaired_code}\n{end_marker}"
+
+    full_repaired = frozen_prefix + repaired_code + frozen_suffix
+
+    # Write to temp file and evaluate
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False, dir="/tmp") as f:
+        f.write(full_repaired)
+        repaired_path = f.name
+
+    try:
+        # Validate: can we build the DAG?
+        spec = importlib.util.spec_from_file_location("_meta_repair", repaired_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        repaired_dag = MASDAG.from_dict(mod.build_dag())
+        structural_errors = repaired_dag.structural_errors()
+        if structural_errors:
+            raise ValueError("; ".join(structural_errors))
+
+        # Run evaluation on the repaired DAG
+        repaired_traces = asyncio.run(
+            _runner.arun_batch(_eval_prompts, dag=repaired_dag, max_concurrency=_CONCURRENCY)
+        )
+        repaired_correct = sum(1 for t in repaired_traces if t.task_score and t.task_score > 0)
+        repaired_accuracy = repaired_correct / len(repaired_traces) if repaired_traces else 0.0
+
+        # Simple scoring for comparison (use accuracy for now)
+        if not _SKIP_DIAGNOSE:
+            try:
+                repaired_profiles = asyncio.run(_classify_batch(repaired_traces))
+            except Exception:
+                repaired_profiles = []
+            repaired_fm_total = 0
+            for profile in repaired_profiles:
+                for gid in GROUP_IDS:
+                    if gid in profile.labels and profile.labels[gid].present:
+                        repaired_fm_total += 1
+            repaired_task_scores = []
+            for i, trace in enumerate(repaired_traces):
+                is_correct = bool(trace.task_score and trace.task_score > 0)
+                trace_failures = 0
+                if i < len(repaired_profiles):
+                    trace_failures = sum(
+                        1 for gid in GROUP_IDS
+                        if gid in repaired_profiles[i].labels and repaired_profiles[i].labels[gid].present
+                    )
+                repaired_task_scores.append(_score_task(is_correct, trace_failures, len(repaired_dag.agent_nodes)))
+            repaired_score = sum(repaired_task_scores) / len(repaired_task_scores) if repaired_task_scores else 0.0
+        else:
+            repaired_score = repaired_accuracy
+
+        # Did it improve?
+        if repaired_score > _meta_best_score:
+            _meta_best_score = repaired_score
+            _meta_best_code = full_repaired
+            # Update best task results
+            new_results: dict[str, dict] = {}
+            for i, trace in enumerate(repaired_traces):
+                task_hash = str(hash(trace.task_key))[:12]
+                output_snippet = ""
+                if trace.trajectory:
+                    for line in reversed(trace.trajectory.split("\n")):
+                        if line.startswith("Output:") and len(line) > 10:
+                            output_snippet = line[8:120].strip()
+                            break
+                new_results[task_hash] = {
+                    "score": float(trace.task_score or 0.0),
+                    "prompt_snippet": trace.task_key[:80],
+                    "output_snippet": output_snippet[:120],
+                    "fm_labels": [],
+                    "trace_excerpt": "",
+                }
+            _meta_best_task_results = new_results
+
+            feedback = (
+                f"\n=== META-REPAIR SUCCESS ==="
+                f"\nMeta-diagnoser improved score: {current_score:.4f} → {repaired_score:.4f}"
+                f"\nAccuracy: {best_correct}/20 → {repaired_correct}/20"
+                f"\n=== END META-REPAIR ==="
+            )
+            # Overwrite the program file so SkyDiscover picks up the repaired version
+            Path(program_path).write_text(full_repaired, encoding="utf-8")
+            return feedback, True
+        else:
+            feedback = (
+                f"\n=== META-REPAIR ATTEMPTED ==="
+                f"\nMeta-diagnoser repair did not improve: "
+                f"{_meta_best_score:.4f} (best) vs {repaired_score:.4f} (repaired)"
+                f"\nRepaired accuracy: {repaired_correct}/20"
+                f"\n=== END META-REPAIR ==="
+            )
+            return feedback, False
+
+    except Exception as e:
+        feedback = f"\n=== META-REPAIR FAILED: {e} ==="
+        return feedback, False
+    finally:
+        Path(repaired_path).unlink(missing_ok=True)
+
+
 def _score_task(is_correct: bool, total_failures: int, num_agents: int) -> float:
-    s = 1.0 / (1.0 + total_failures)
-    if is_correct:
-        s *= 1.2
+    """Score a single task trace.
+
+    Accuracy is the primary signal: correct = 1.0 base, incorrect = 0.0 base.
+    Failure reduction is a secondary bonus/penalty on top (max ±0.3).
+    This ensures that getting the answer right is always more valuable than
+    reducing failure modes on a wrong answer.
+
+    Score ranges:
+      correct + 0 failures  → 1.0 + 0.3 = 1.3  (best)
+      correct + 3 failures  → 1.0 + 0.0 = 1.0
+      correct + 6 failures  → 1.0 - 0.3 = 0.7
+      wrong   + 0 failures  → 0.0 + 0.3 = 0.3
+      wrong   + 3 failures  → 0.0 + 0.0 = 0.0
+      wrong   + 6 failures  → 0.0 - 0.3 = -0.3 → clamped to 0.0
+    """
+    base = 1.0 if is_correct else 0.0
+    # FM bonus: 0 failures → +0.3, 3 failures → 0, 6 failures → -0.3
+    fm_bonus = 0.3 * (1.0 - total_failures / 3.0)
+    s = base + fm_bonus
     if num_agents > 4:
         s -= 0.01 * (num_agents - 4)
     return max(0.0, s)
@@ -467,7 +775,7 @@ def _score_task(is_correct: bool, total_failures: int, num_agents: int) -> float
 def evaluate(program_path: str) -> dict:
     """Evaluate a candidate DAG."""
     _init_globals()
-    assert _runner is not None and _diagnoser is not None
+    assert _runner is not None
     assert _eval_prompts is not None and _suite is not None
 
     # 1. Load candidate DAG
@@ -502,38 +810,119 @@ def evaluate(program_path: str) -> dict:
             "artifacts": {"feedback": f"MAS execution failed:\n{e}\n{traceback.format_exc()}"},
         }
 
-    # 3. Classify FM
-    try:
-        profiles = asyncio.run(_classify_batch(traces))
-    except Exception:
-        profiles = []
-
-    # 4. Score
+    # 3. Score
     n = len(traces)
     correct_count = sum(1 for t in traces if t.task_score and t.task_score > 0)
     accuracy = correct_count / n if n > 0 else 0.0
 
-    fm_counts = {g: 0 for g in GROUP_IDS}
-    for profile in profiles:
-        for gid in GROUP_IDS:
-            if gid in profile.labels and profile.labels[gid].present:
-                fm_counts[gid] += 1
-    fm_rates = {g: fm_counts[g] / n for g in GROUP_IDS} if n > 0 else {g: 0.0 for g in GROUP_IDS}
-    total_failures = sum(fm_counts.values())
+    profiles: list = []
 
-    task_scores = []
+    if _SKIP_DIAGNOSE:
+        # Pure accuracy mode — no FM diagnosis
+        combined_score = accuracy
+        fm_rates = {g: 0.0 for g in GROUP_IDS}
+        total_failures = 0
+    else:
+        # Full mode with FM diagnosis
+        try:
+            profiles = asyncio.run(_classify_batch(traces))
+        except Exception:
+            profiles = []
+
+        fm_counts = {g: 0 for g in GROUP_IDS}
+        for profile in profiles:
+            for gid in GROUP_IDS:
+                if gid in profile.labels and profile.labels[gid].present:
+                    fm_counts[gid] += 1
+        fm_rates = {g: fm_counts[g] / n for g in GROUP_IDS} if n > 0 else {g: 0.0 for g in GROUP_IDS}
+        total_failures = sum(fm_counts.values())
+
+        task_scores = []
+        for i, trace in enumerate(traces):
+            is_correct = bool(trace.task_score and trace.task_score > 0)
+            trace_failures = 0
+            if i < len(profiles):
+                trace_failures = sum(
+                    1 for gid in GROUP_IDS
+                    if gid in profiles[i].labels and profiles[i].labels[gid].present
+                )
+            task_scores.append(_score_task(is_correct, trace_failures, num_agents))
+        combined_score = sum(task_scores) / len(task_scores) if task_scores else 0.0
+
+    # 4. Collect per-task results for meta-diagnoser
+    current_task_results: dict[str, dict] = {}
     for i, trace in enumerate(traces):
-        is_correct = bool(trace.task_score and trace.task_score > 0)
-        trace_failures = 0
-        if i < len(profiles):
-            trace_failures = sum(
-                1 for gid in GROUP_IDS
+        task_hash = str(hash(trace.task_key))[:12]
+        output_snippet = ""
+        if hasattr(trace, "trajectory") and trace.trajectory:
+            # Extract last agent output from trajectory
+            traj_lines = trace.trajectory.split("\n")
+            for line in reversed(traj_lines):
+                if line.startswith("Output:") and len(line) > 10:
+                    output_snippet = line[8:120].strip()
+                    break
+        fm_labels = []
+        if not _SKIP_DIAGNOSE and i < len(profiles):
+            fm_labels = [
+                gid for gid in GROUP_IDS
                 if gid in profiles[i].labels and profiles[i].labels[gid].present
-            )
-        task_scores.append(_score_task(is_correct, trace_failures, num_agents))
-    combined_score = sum(task_scores) / len(task_scores) if task_scores else 0.0
+            ]
+        # Extract trace excerpt (last 2 agent steps) for failed tasks
+        trace_excerpt = ""
+        if trace.task_score is not None and trace.task_score <= 0 and trace.trajectory:
+            traj_lines = trace.trajectory.split("\n")
+            agent_blocks = []
+            current_block = []
+            for line in traj_lines:
+                if line.startswith("--- [agent]"):
+                    if current_block:
+                        agent_blocks.append("\n".join(current_block))
+                    current_block = [line]
+                elif current_block:
+                    current_block.append(line)
+            if current_block:
+                agent_blocks.append("\n".join(current_block))
+            # Keep last 2 agent blocks, truncated
+            for block in agent_blocks[-2:]:
+                trace_excerpt += block[:300] + "\n...\n"
 
-    # 5. Feedback
+        current_task_results[task_hash] = {
+            "score": float(trace.task_score or 0.0),
+            "prompt_snippet": trace.task_key[:80],
+            "output_snippet": output_snippet[:120],
+            "fm_labels": fm_labels,
+            "trace_excerpt": trace_excerpt[:600] if trace_excerpt else "",
+        }
+
+    # 5. Meta-diagnoser: track stagnation and trigger direct code repair
+    global _meta_best_score, _meta_best_code, _meta_best_task_results
+    global _meta_stagnation_count, _meta_recent_mutations, _eval_counter
+    _eval_counter += 1
+
+    meta_guidance = ""
+    meta_repaired = False
+    if combined_score > _meta_best_score:
+        _meta_best_score = combined_score
+        _meta_best_code = Path(program_path).read_text(encoding="utf-8")
+        _meta_best_task_results = current_task_results.copy()
+        _meta_stagnation_count = 0
+        _meta_recent_mutations.clear()
+    else:
+        _meta_stagnation_count += 1
+        _meta_recent_mutations.append({
+            "score": combined_score,
+            "task_results": current_task_results,
+        })
+        if len(_meta_recent_mutations) > 10:
+            _meta_recent_mutations = _meta_recent_mutations[-10:]
+
+        if _meta_stagnation_count >= _META_STAGNATION_THRESHOLD and _meta_best_code:
+            meta_guidance, meta_repaired = _meta_diagnose_and_repair(
+                current_task_results, combined_score, dag, traces,
+            )
+            _meta_stagnation_count = 0
+
+    # 6. Feedback
     from optpilot.data.fm_taxonomy_6group import GROUP_DEFINITIONS
     sorted_fms = sorted(fm_rates.items(), key=lambda x: x[1], reverse=True)
     top_failures = [
@@ -551,19 +940,17 @@ def evaluate(program_path: str) -> dict:
     feedback_lines.extend(top_failures or ["  No failures detected."])
     feedback_lines.append(f"\nCombined score: {combined_score:.4f}")
 
+    # Inject meta-diagnosis if triggered
+    if meta_guidance:
+        feedback_lines.append(meta_guidance)
+
     # Inject prior-guided repair hints
-    global _eval_counter
-    _eval_counter += 1
     use_priors_this_eval = _USE_PRIORS_ALWAYS or (_USE_PRIORS_ALTERNATE and _eval_counter % 2 == 0)
 
     if use_priors_this_eval:
         prior_guidance = _build_prior_guidance(fm_rates)
         if prior_guidance:
             feedback_lines.append(prior_guidance)
-            feedback_lines.append(
-                "\nTip: Use the `query_prior` tool to get full repair recipes "
-                "and lessons for any FM group (A-F)."
-            )
 
     metrics = {
         "combined_score": round(combined_score, 4),
@@ -571,6 +958,8 @@ def evaluate(program_path: str) -> dict:
         "total_failures": total_failures,
         "num_agents": num_agents,
         "prior_guided": use_priors_this_eval,
+        "meta_diagnosed": bool(meta_guidance),
+        "meta_repaired": meta_repaired,
     }
     for gid in GROUP_IDS:
         metrics[f"fm_{gid}"] = round(fm_rates[gid], 4)

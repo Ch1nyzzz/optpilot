@@ -1,8 +1,8 @@
 """Repair Jacobian — experience-driven repair direction recommendation.
 
-Maintains a matrix mapping (FM group, RepairPattern) → success statistics.
-Used to recommend the most promising repair directions for a given failure,
-and updated after each repair attempt.
+Maintains a matrix mapping (FM group, observable change family) → success
+statistics. Used to recommend the most promising coarse repair directions for
+a given failure, and updated after each repair attempt.
 
 Two tracking modes:
 - **assigned_pattern_id**: pre-selected pattern used for online recommendation.
@@ -24,9 +24,12 @@ from optpilot.config import (
     LIBRARY_DIR,
 )
 from optpilot.skills.repair_patterns import (
+    change_family_items,
     FailureSignature,
     PatternCatalog,
     RepairPattern,
+    get_change_family_direction,
+    normalize_repair_direction_id,
 )
 
 _JACOBIAN_DIR = LIBRARY_DIR / "jacobian"
@@ -73,6 +76,7 @@ class RepairOutcome:
     fm_delta: float
     pass_delta: float
     timestamp: str = ""
+    has_hub: bool = False
 
     def __post_init__(self):
         if not self.timestamp:
@@ -84,6 +88,7 @@ class RepairOutcome:
             fm_group=self.fm_group,
             dag_component=self.dag_component,
             agent=self.agent,
+            has_hub=self.has_hub,
         )
 
 
@@ -96,7 +101,7 @@ class RepairJacobian:
 
     Matrix layout:
         rows = FM groups        (e.g. "A", "D")
-        cols = pattern IDs      (e.g. "prompt_add_constraint", "edge_fix_carry_data")
+        cols = change families  (e.g. "prompt_refine", "edge_route")
         cell = JacobianEntry    (n_applied, n_success, deltas)
     """
 
@@ -109,7 +114,7 @@ class RepairJacobian:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.catalog = catalog or PatternCatalog()
 
-        # Online recommendation matrix: {sig_key: {pattern_id: JacobianEntry}}
+        # Online recommendation matrix: {sig_key: {change_type: JacobianEntry}}
         self.matrix: dict[str, dict[str, JacobianEntry]] = {}
 
         # Full outcome log (assigned + observed)
@@ -130,29 +135,31 @@ class RepairJacobian:
         top_k: int = 3,
         applied_patterns: set[str] | None = None,
     ) -> list[tuple[RepairPattern, float]]:
-        """Recommend top-k repair patterns for a failure signature.
+        """Recommend top-k repair families for a failure signature.
 
         Returns list of (RepairPattern, score) sorted by score descending.
         Score = success_rate when data exists, or an FM-group prior for cold
         start.
 
         Args:
-            applied_patterns: Pattern IDs already successfully applied in this
-                optimization session.  Their scores are multiplied by
+            applied_patterns: Change-family IDs already successfully applied in
+                this optimization session. Their scores are multiplied by
                 ``JACOBIAN_APPLIED_DECAY`` (default 0.3) to encourage
-                diversity — the same change type yields diminishing returns.
+                diversity.
         """
         sig_key = sig.signature_key()
         entries = self.matrix.get(sig_key, {})
         cooldowns = self.assigned_pattern_cooldowns.get(sig_key, {})
-        applied = applied_patterns or set()
+        applied = {normalize_repair_direction_id(pid) for pid in (applied_patterns or set())}
 
         scored: list[tuple[str, float]] = []
         blocked_pattern_ids: set[str] = {
-            pattern_id for pattern_id, remaining in cooldowns.items() if remaining > 0
+            normalize_repair_direction_id(pattern_id)
+            for pattern_id, remaining in cooldowns.items()
+            if remaining > 0
         }
 
-        for pattern_id, pattern in self.catalog.effective_items():
+        for pattern_id, pattern in change_family_items():
             if pattern_id in blocked_pattern_ids:
                 continue
             entry = entries.get(pattern_id)
@@ -170,7 +177,7 @@ class RepairJacobian:
             scored.append((pattern_id, score))
 
         if not scored:
-            for pattern_id, pattern in self.catalog.effective_items():
+            for pattern_id, pattern in change_family_items():
                 entry = entries.get(pattern_id)
                 if entry and entry.n_applied >= 1:
                     prior = self._cold_start_score(sig, pattern)
@@ -197,7 +204,9 @@ class RepairJacobian:
 
         results: list[tuple[RepairPattern, float]] = []
         for pattern_id, score in scored[:top_k]:
-            pattern = self.catalog[pattern_id]
+            pattern = get_change_family_direction(pattern_id)
+            if pattern is None:
+                continue
             results.append((pattern, score))
         return results
 
@@ -219,47 +228,31 @@ class RepairJacobian:
         data_priors_path = self.base_dir / "data_driven_priors.json"
         if data_priors_path.exists():
             try:
-                self._cached_priors = json.loads(
-                    data_priors_path.read_text(encoding="utf-8")
-                )
+                raw_priors = json.loads(data_priors_path.read_text(encoding="utf-8"))
+                self._cached_priors = self._normalize_priors(raw_priors)
                 return self._cached_priors
             except Exception:
                 pass
 
-        # Fallback: hand-coded heuristics (used only before first offline analysis)
-        self._cached_priors: dict[str, dict[str, float]] = {
-            "A": {
-                "prompt_add_constraint": 0.55,
-                "prompt_narrow_role": 0.45,
-                "prompt_add_step_by_step": 0.30,
-            },
-            "B": {
-                "loop_fix_config": 0.55,
-                "edge_add_condition": 0.45,
-                "loop_add_retry": 0.35,
-            },
-            "C": {
-                "edge_add_context_propagation": 0.55,
-                "edge_fix_carry_data": 0.50,
-                "edge_add_missing": 0.35,
-            },
-            "D": {
-                "edge_add_missing": 0.55,
-                "edge_fix_carry_data": 0.45,
-                "edge_add_condition": 0.30,
-            },
-            "E": {
-                "prompt_add_step_by_step": 0.55,
-                "prompt_add_constraint": 0.40,
-                "topo_split_agent": 0.25,
-            },
-            "F": {
-                "prompt_strengthen_verification": 0.60,
-                "topo_add_verification_node": 0.45,
-                "loop_add_retry": 0.20,
-            },
+        # Fallback: flat prior only. Learned priors should come from offline
+        # analysis; before that, keep the top-level action space unbiased.
+        self._cached_priors = {
+            fm_group: {pattern_id: 0.10 for pattern_id, _ in change_family_items()}
+            for fm_group in ("A", "B", "C", "D", "E", "F")
         }
         return self._cached_priors
+
+    def _normalize_priors(self, raw_priors: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
+        """Collapse legacy fine-grained priors into coarse change families."""
+        normalized: dict[str, dict[str, float]] = {}
+        for fm_group, priors in raw_priors.items():
+            merged: dict[str, float] = {}
+            for pattern_id, score in priors.items():
+                family_id = normalize_repair_direction_id(str(pattern_id))
+                merged[family_id] = max(float(score), merged.get(family_id, 0.0))
+            if merged:
+                normalized[str(fm_group)] = merged
+        return normalized
 
     # ---------------------------------------------------------------- #
     #  Update                                                           #
@@ -272,38 +265,50 @@ class RepairJacobian:
         changed). When the observed pattern is unknown, successful runs do not
         credit the assigned recommendation, to avoid false positive attribution.
         """
-        sig_key = outcome.signature.signature_key()
+        normalized_outcome = RepairOutcome(
+            fm_group=outcome.fm_group,
+            dag_component=outcome.dag_component,
+            agent=outcome.agent,
+            assigned_pattern_id=normalize_repair_direction_id(outcome.assigned_pattern_id),
+            observed_pattern_id=normalize_repair_direction_id(outcome.observed_pattern_id),
+            success=outcome.success,
+            fm_delta=outcome.fm_delta,
+            pass_delta=outcome.pass_delta,
+            timestamp=outcome.timestamp,
+            has_hub=outcome.has_hub,
+        )
+        sig_key = normalized_outcome.signature.signature_key()
 
         # Prefer observed (what actually happened) over assigned (what we suggested).
-        if outcome.observed_pattern_id:
-            self._update_entry(sig_key, outcome.observed_pattern_id, outcome)
+        if normalized_outcome.observed_pattern_id:
+            self._update_entry(sig_key, normalized_outcome.observed_pattern_id, normalized_outcome)
 
         # If observed differs from assigned, also record a "tried but not
         # followed" datapoint on assigned so its score decays naturally.
         if (
-            outcome.observed_pattern_id
-            and outcome.assigned_pattern_id
-            and outcome.observed_pattern_id != outcome.assigned_pattern_id
+            normalized_outcome.observed_pattern_id
+            and normalized_outcome.assigned_pattern_id
+            and normalized_outcome.observed_pattern_id != normalized_outcome.assigned_pattern_id
         ):
             self._update_entry(
                 sig_key,
-                outcome.assigned_pattern_id,
-                outcome,
+                normalized_outcome.assigned_pattern_id,
+                normalized_outcome,
                 override_success=False,  # LLM chose not to follow it
             )
-        elif outcome.assigned_pattern_id and not outcome.success:
+        elif normalized_outcome.assigned_pattern_id and not normalized_outcome.success:
             # When the repair failed and we cannot confidently identify what
             # happened, it is still safe to record that the recommended pattern
             # did not lead to success.
             self._update_entry(
                 sig_key,
-                outcome.assigned_pattern_id,
-                outcome,
+                normalized_outcome.assigned_pattern_id,
+                normalized_outcome,
                 override_success=False,
             )
 
-        self._update_assigned_pattern_state(sig_key, outcome)
-        self.outcomes.append(outcome)
+        self._update_assigned_pattern_state(sig_key, normalized_outcome)
+        self.outcomes.append(normalized_outcome)
 
     def _update_assigned_pattern_state(self, sig_key: str, outcome: RepairOutcome) -> None:
         """Track assigned-pattern failure streaks and short cooldowns."""
@@ -394,15 +399,26 @@ class RepairJacobian:
 
     def _load(self) -> None:
         """Load persisted state from disk."""
-        # Load matrix
+        # Load matrix — skip old-format keys (no ":" separator) since they
+        # lack topology info and cannot be accurately assigned to a specific
+        # hub/loop combination.  Cold-start priors cover those cases.
         matrix_path = self.base_dir / "matrix.json"
         if matrix_path.exists():
             try:
                 raw = json.loads(matrix_path.read_text(encoding="utf-8"))
                 for sig_key, patterns in raw.items():
-                    self.matrix[sig_key] = {}
+                    if ":" not in sig_key:
+                        continue  # drop old-format key
+                    if sig_key not in self.matrix:
+                        self.matrix[sig_key] = {}
                     for pid, entry_data in patterns.items():
-                        self.matrix[sig_key][pid] = JacobianEntry(**entry_data)
+                        normalized_pid = normalize_repair_direction_id(str(pid))
+                        entry = self.matrix[sig_key].setdefault(normalized_pid, JacobianEntry())
+                        loaded = JacobianEntry(**entry_data)
+                        entry.n_applied += loaded.n_applied
+                        entry.n_success += loaded.n_success
+                        entry.total_fm_delta += loaded.total_fm_delta
+                        entry.total_pass_delta += loaded.total_pass_delta
             except Exception as e:
                 print(f"  Warning: failed to load Jacobian matrix: {e}")
 
@@ -412,14 +428,14 @@ class RepairJacobian:
                 raw = json.loads(state_path.read_text(encoding="utf-8"))
                 self.assigned_failure_streaks = {
                     str(sig_key): {
-                        str(pattern_id): int(value)
+                        normalize_repair_direction_id(str(pattern_id)): int(value)
                         for pattern_id, value in pattern_map.items()
                     }
                     for sig_key, pattern_map in raw.get("assigned_failure_streaks", {}).items()
                 }
                 self.assigned_pattern_cooldowns = {
                     str(sig_key): {
-                        str(pattern_id): int(value)
+                        normalize_repair_direction_id(str(pattern_id)): int(value)
                         for pattern_id, value in pattern_map.items()
                     }
                     for sig_key, pattern_map in raw.get("assigned_pattern_cooldowns", {}).items()
@@ -499,10 +515,11 @@ class RepairJacobian:
         lines: list[str] = [f"# Jacobian Experience Report for FM Group {fm_group}", ""]
 
         # --- 1. Matrix stats for this FM group ---
+        # sig_key format: "D:hub=0:loop=1"; match on FM group prefix
         relevant = {
             sig_key: entries
             for sig_key, entries in self.matrix.items()
-            if sig_key == fm_group
+            if sig_key.split(":")[0] == fm_group
         }
         if relevant:
             lines.append("## Pattern Success Rates (online matrix)")

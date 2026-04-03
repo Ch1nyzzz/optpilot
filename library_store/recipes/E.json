@@ -1,13 +1,1 @@
-[
-  {
-    "recipe_id": "E_topology_change_0",
-    "fm_group": "E",
-    "change_type": "topology_change",
-    "precondition": "The system shows instruction non‑compliance, verification failures, or reasoning drift that correlates with multiple hand‑offs between agents (e.g., Planner → Solver → Checker → Verifier) and the performance gain from adding or removing agents is negligible.",
-    "action": "Identify and remove any intermediate agent nodes that do not contribute essential computation (e.g., Planner, Checker, Summarizer). Delete all edges to and from those nodes. Add a direct edge from the preceding node (often the Introduction or the upstream agent) to the downstream core agent (Problem Solver or Executor). If the removed node was a trigger, set the new edge’s trigger flag to match the desired flow (usually true for immediate processing). Update system prompts and introductory text to describe the new, shorter workflow (e.g., a three‑agent workflow instead of five). Optionally lower the temperature of verification‑related agents (e.g., from 0.1 to 0.05) to increase determinism after the simplification.",
-    "root_cause": "Redundant intermediate agents introduce unnecessary transformations and consistency checks, causing task drift, communication bottlenecks, and reasoning errors. Pruning them restores a direct data flow, eliminates drift, and improves verification reliability.",
-    "n_effective": 6,
-    "avg_test_delta": 0.04166666666666663,
-    "example_diffs": []
-  }
-]
+[]

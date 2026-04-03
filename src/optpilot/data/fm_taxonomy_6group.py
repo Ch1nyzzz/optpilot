@@ -141,15 +141,19 @@ GROUP_DEFINITIONS: dict[str, dict] = {
         "name_zh": "验证失败",
         "original_fms": ["3.1", "3.2", "3.3"],
         "description": (
-            "Output verification is absent, premature, or incorrect. "
-            "Includes premature termination, missing verification steps, "
-            "and verification that reaches wrong conclusions."
+            "A verification/checking role or step exists in the system but "
+            "fails to work properly. Includes premature acceptance of wrong "
+            "answers, weak or superficial checks, and verification that "
+            "reaches wrong conclusions. Does NOT apply when the system has "
+            "no verifier/checker role — absence of verification by design "
+            "is not a verification failure."
         ),
         "repair_strategy": "Multi-level verification: low-level code compilation + high-level goal checking.",
         "analyze_hint": (
-            "Focus on where output verification is absent, premature, or incorrect. "
-            "Look for agents that terminate without checking results, skip verification "
-            "steps, or verify solutions but reach wrong conclusions."
+            "Focus on where a verifier/checker role EXISTS but fails to do its job. "
+            "Look for verifiers that accept wrong answers, check superficially, or "
+            "reach wrong conclusions. If the system has no verifier role at all, "
+            "do not flag this group."
         ),
         "failure_examples": (
             "Example 1: Agent_Verifier immediately accepts Agent_Problem_Solver's "

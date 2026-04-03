@@ -32,10 +32,11 @@ MAS-as-DAG abstraction: any MAS = MASDAG(Nodes, Edges).
 
 Experience is stored **globally** in `library_store/`. Topology differentiation is automatic:
 
-- `MASDAG.extract_topology_features()` detects `has_hub` and `has_loop` from DAG structure
-- `FailureSignature.signature_key()` embeds these features: e.g. `"B:hub=0:loop=1"`
-- Jacobian matrix rows naturally separate different topology families
+- `MASDAG.extract_topology_features()` detects `has_hub` from DAG structure
+- `FailureSignature.signature_key()` embeds this feature: e.g. `"B:hub=0"`
+- Jacobian matrix rows naturally separate hub vs non-hub topology families
 - No hardcoded topology mapping — new target MAS automatically finds matching experience
+- Loop presence is not tracked: evolution adds loops autonomously regardless of initial topology
 
 Storage layout:
 - `library_store/jacobian/` — Repair effectiveness matrix + data-driven priors
@@ -47,13 +48,13 @@ Storage layout:
 
 | target_mas | Benchmark | Topology |
 |---|---|---|
-| ag2 | MMLU + AIME 2025 + OlympiadBench | hub=0, loop=1 |
-| agentcoder | HumanEval | hub=0, loop=1 |
-| simple_star | GAIA | hub=1, loop=1 |
-| simple_hier | SWE-bench Lite | hub=0, loop=1 |
-| appworld | AppWorld | hub=1, loop=0 |
-| hyperagent | SWE-bench Lite | hub=0, loop=1 |
-| magentic | GAIA | hub=1, loop=1 |
+| ag2 | MMLU + AIME 2025 + OlympiadBench | no-hub (linear) |
+| agentcoder | HumanEval | no-hub (linear) |
+| simple_star | GAIA | hub (star) |
+| simple_hier | SWE-bench Lite | no-hub (linear) |
+| appworld | AppWorld | hub (star) |
+| hyperagent | SWE-bench Lite | no-hub (linear) |
+| magentic | GAIA | hub (star) |
 
 - Model: MiniMax M2.5 via Together AI (unified for execution + diagnosis)
 - Initial DAG builders: `experiments/openevolve_initial_dag_*.py`

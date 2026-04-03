@@ -1,29 +1,18 @@
-"""Target-MAS OpenEvolve cold-start experiment.
+"""Target-MAS evolutionary search experiment.
 
-Evolves target MAS DAGs via SkyDiscover's OpenEvolve (MAP-Elites).
-Supports multiple target MAS presets and their corresponding benchmarks:
-
-  - ag2:         AG2 MathChat (3-agent linear) on MMLU/AIME/OlympiadBench
-  - appworld:    AppWorld Star (Supervisor + specialists) on multi-step API tasks
-  - hyperagent:  HyperAgent Hierarchical (Planner → sub-agents) on SWE-bench Lite
-  - magentic:    Magentic-One Star (Orchestrator + 4 agents) on GAIA
-  - agentcoder:  AgentCoder (Programmer + TestDesigner + TestExecutor) on HumanEval
+Evolves target MAS DAGs via SkyDiscover search backends (OpenEvolve, AdaEvolve, etc.).
+Supports multiple target MAS presets and topology × benchmark combinations.
 
 Usage:
-    # AG2 MathChat (linear, math)
-    python -m experiments.run_openevolve --target-mas ag2 --iterations 50
+    # Linear topology on GAIA with AdaEvolve
+    python -m experiments.run_evolve --topology linear --benchmark gaia --search adaevolve --iterations 50
 
-    # AppWorld (star, API tasks)
-    python -m experiments.run_openevolve --target-mas appworld --iterations 50
+    # Star topology on GAIA with OpenEvolve (default)
+    python -m experiments.run_evolve --topology star --benchmark gaia --iterations 50
 
-    # HyperAgent (hierarchical, code fixing)
-    python -m experiments.run_openevolve --target-mas hyperagent --iterations 50
-
-    # Magentic-One (complex star, general tasks)
-    python -m experiments.run_openevolve --target-mas magentic --iterations 50
-
-    # AgentCoder (pipeline, code generation)
-    python -m experiments.run_openevolve --target-mas agentcoder --iterations 50
+    # Legacy presets
+    python -m experiments.run_evolve --target-mas ag2 --iterations 50
+    python -m experiments.run_evolve --target-mas magentic --search adaevolve --iterations 50
 """
 
 import argparse
@@ -49,39 +38,44 @@ from optpilot.modules.runner import OptPilotRunner
 # SkyDiscover
 from skydiscover.api import run_discovery
 
-CONFIG_FILE = Path(__file__).parent / "openevolve_config.yaml"
-EVALUATOR_FILE = Path(__file__).parent / "openevolve_evaluator.py"
-EVALUATOR_MULTI_FILE = Path(__file__).parent / "openevolve_evaluator_multi.py"
+# Config files per search backend
+CONFIG_DIR = Path(__file__).parent
+CONFIG_FILES: dict[str, Path] = {
+    "openevolve_native": CONFIG_DIR / "openevolve_config.yaml",
+    "adaevolve": CONFIG_DIR / "evolve_config_adaevolve.yaml",
+}
+EVALUATOR_FILE = CONFIG_DIR / "openevolve_evaluator.py"
+EVALUATOR_MULTI_FILE = CONFIG_DIR / "openevolve_evaluator_multi.py"
 
 # Target MAS → (initial program, result prefix) — legacy presets
 TARGET_MASES: dict[str, tuple[str, str]] = {
     "ag2": (
         "openevolve_initial_dag.py",
-        "ag2_mathchat_openevolve",
+        "ag2_mathchat",
     ),
     "appworld": (
         "openevolve_initial_dag_appworld.py",
-        "appworld_star_openevolve",
+        "appworld_star",
     ),
     "hyperagent": (
         "openevolve_initial_dag_hyperagent.py",
-        "hyperagent_hierarchical_openevolve",
+        "hyperagent_hierarchical",
     ),
     "magentic": (
         "openevolve_initial_dag_magentic.py",
-        "magentic_one_star_openevolve",
+        "magentic_one_star",
     ),
     "simple_star": (
         "openevolve_initial_dag_simple_star.py",
-        "simple_star_gaia_openevolve",
+        "simple_star_gaia",
     ),
     "simple_hier": (
         "openevolve_initial_dag_simple_hier.py",
-        "simple_hier_swebench_openevolve",
+        "simple_hier_swebench",
     ),
     "agentcoder": (
         "openevolve_initial_dag_agentcoder.py",
-        "agentcoder_humaneval_openevolve",
+        "agentcoder_humaneval",
     ),
 }
 
@@ -94,7 +88,10 @@ TOPOLOGIES: dict[str, str] = {
 }
 
 # Benchmark IDs supported for topology × benchmark experiments
-BENCHMARKS = ("math", "humaneval", "gaia", "swebench")
+BENCHMARKS = ("math", "humaneval", "gaia", "swebench", "livecodebench")
+
+# Supported search backends
+SEARCH_BACKENDS = ("openevolve_native", "adaevolve", "gepa_native")
 
 
 def _split_suite(suite: OfficialBenchmarkSuite, n_train: int) -> tuple[list, list]:
@@ -286,7 +283,7 @@ def _load_benchmark_config(benchmark: str, total: int):
 
     elif benchmark == "gaia":
         from optpilot.data.benchmarks_gaia import load_gaia_examples, score_gaia
-        all_examples = load_gaia_examples(total)
+        all_examples = load_gaia_examples(total, strict_supported_only=True)
         _lookup = {ex.prompt: ex for ex in all_examples}
 
         def score_fn(task_prompt, _dag, exec_trace):
@@ -319,6 +316,24 @@ def _load_benchmark_config(benchmark: str, total: int):
 
         return all_examples, "SWE-bench-Lite", score_fn, tool_setup_fn
 
+    elif benchmark == "livecodebench":
+        from optpilot.data.benchmarks_livecodebench import load_livecodebench_examples, score_livecodebench
+        from optpilot.tools.agentcoder_tools import CodeExecutionEnvironment, build_tools as ac_build
+        all_examples = load_livecodebench_examples(total)
+        _lookup = {ex.prompt: ex for ex in all_examples}
+
+        def tool_setup_fn(task_prompt):
+            return ac_build(CodeExecutionEnvironment())
+
+        def score_fn(task_prompt, _dag, exec_trace):
+            ex = _lookup.get(task_prompt)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_livecodebench(pred, ex)
+
+        return all_examples, "LiveCodeBench", score_fn, tool_setup_fn
+
     else:
         raise ValueError(f"Unknown benchmark: {benchmark}")
 
@@ -328,6 +343,8 @@ def run(
     target_mas: str = "ag2",
     topology: str | None = None,
     benchmark: str | None = None,
+    search: str = "openevolve_native",
+    config_path: str | None = None,
     n_train: int = 100,
     n_test: int = 100,
     iterations: int = 50,
@@ -337,8 +354,19 @@ def run(
     timeout: int = 600,
     reuse_diagnose_dir: str | None = None,
     with_priors: bool = False,
-    gaia_supported_only: bool = False,
+    skip_diagnose: bool = False,
 ):
+    # Resolve config file: explicit > per-search-backend default > openevolve fallback
+    if config_path:
+        config_file = Path(config_path)
+    elif search in CONFIG_FILES:
+        config_file = CONFIG_FILES[search]
+    else:
+        config_file = CONFIG_FILES["openevolve_native"]
+
+    if not config_file.exists():
+        raise FileNotFoundError(f"Config file not found: {config_file}")
+
     # Resolve topology × benchmark (new) or legacy target_mas
     if topology and benchmark:
         if topology not in TOPOLOGIES:
@@ -346,16 +374,17 @@ def run(
         if benchmark not in BENCHMARKS:
             raise ValueError(f"Unknown benchmark: {benchmark}. Available: {list(BENCHMARKS)}")
         initial_program_filename = TOPOLOGIES[topology]
-        result_prefix = f"{topology}_{benchmark}_openevolve"
+        result_prefix = f"{topology}_{benchmark}_{search}"
         # For evaluator, combine as target_mas
         target_mas = f"{topology}_{benchmark}"
     elif target_mas in TARGET_MASES:
         initial_program_filename, result_prefix = TARGET_MASES[target_mas]
+        result_prefix = f"{result_prefix}_{search}"
     else:
         raise ValueError(f"Unknown target_mas: {target_mas}. Use --topology + --benchmark or a legacy preset.")
     initial_program_path = str(Path(__file__).parent / initial_program_filename)
 
-    requested_total = n_train + n_test
+    total = n_train + n_test
     model_short = model.split("/")[-1]
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     prior_tag = "_priors" if with_priors else "_blind"
@@ -364,7 +393,7 @@ def run(
     artifact_dir.mkdir(parents=True, exist_ok=True)
     dag_versions_dir = artifact_dir / "dag_versions"
     dag_versions_dir.mkdir(parents=True, exist_ok=True)
-    openevolve_output_dir = str(artifact_dir / "openevolve_output")
+    evolve_output_dir = str(artifact_dir / "evolve_output")
 
     # ------------------------------------------------------------------
     # Load benchmarks
@@ -374,21 +403,16 @@ def run(
     if benchmark:
         # New topology × benchmark mode
         all_examples, benchmark_label, custom_score_fn, tool_setup_fn = \
-            _load_benchmark_config(benchmark, requested_total)
+            _load_benchmark_config(benchmark, total)
         if benchmark == "math":
             # Math suite uses _split_suite for proportional split
-            full_suite = load_online_benchmark_suite(requested_total)
+            full_suite = load_online_benchmark_suite(total)
             train_examples, test_examples = _split_suite(full_suite, n_train)
-        elif benchmark == "gaia" and gaia_supported_only:
-            from optpilot.data.benchmarks_gaia import load_gaia_examples, split_gaia_examples_evenly
-
-            all_examples = load_gaia_examples(limit=165, strict_supported_only=True)
-            train_examples, test_examples = split_gaia_examples_evenly(all_examples)
         else:
             train_examples = all_examples[:n_train]
             test_examples = all_examples[n_train:n_train + n_test]
     elif target_mas == "ag2":
-        full_suite = load_online_benchmark_suite(requested_total)
+        full_suite = load_online_benchmark_suite(total)
         train_examples, test_examples = _split_suite(full_suite, n_train)
         benchmark_label = "AG2_MathChat"
         custom_score_fn = None
@@ -396,7 +420,7 @@ def run(
     elif target_mas == "appworld":
         from optpilot.data.benchmarks_appworld import load_appworld_examples, score_appworld
         from optpilot.tools.appworld_tools import AppWorldWrapper, build_tools as aw_build
-        all_examples = load_appworld_examples(requested_total)
+        all_examples = load_appworld_examples(total)
         train_examples = all_examples[:n_train]
         test_examples = all_examples[n_train:n_train + n_test]
         benchmark_label = "AppWorld"
@@ -405,7 +429,7 @@ def run(
             ex = _aw_lookup.get(task_prompt)
             if ex is None:
                 return None
-            wrapper = AppWorldWrapper(task_id=ex.task_id, experiment_name="openevolve")
+            wrapper = AppWorldWrapper(task_id=ex.task_id, experiment_name="evolve")
             return aw_build(wrapper)
         def custom_score_fn(task_prompt, _dag, exec_trace):
             ex = _aw_lookup.get(task_prompt)
@@ -415,7 +439,7 @@ def run(
             return score_appworld(pred, ex.gold_answers[0])
     elif target_mas in ("hyperagent", "simple_hier"):
         from optpilot.data.benchmarks_swebench import load_swebench_examples, score_swebench
-        all_examples = load_swebench_examples(requested_total)
+        all_examples = load_swebench_examples(total)
         train_examples = all_examples[:n_train]
         test_examples = all_examples[n_train:n_train + n_test]
         benchmark_label = "SWE-bench-Lite"
@@ -433,19 +457,11 @@ def run(
             pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
             return score_swebench(pred, ex.gold_answers[0])
     elif target_mas in ("magentic", "simple_star"):
-        from optpilot.data.benchmarks_gaia import (
-            load_gaia_examples,
-            score_gaia,
-            split_gaia_examples_evenly,
-        )
+        from optpilot.data.benchmarks_gaia import load_gaia_examples, score_gaia
         from optpilot.tools.magentic_tools import GeneralEnvironment, build_tools as mg_build
-        if gaia_supported_only:
-            all_examples = load_gaia_examples(limit=165, strict_supported_only=True)
-            train_examples, test_examples = split_gaia_examples_evenly(all_examples)
-        else:
-            all_examples = load_gaia_examples(requested_total)
-            train_examples = all_examples[:n_train]
-            test_examples = all_examples[n_train:n_train + n_test]
+        all_examples = load_gaia_examples(total, strict_supported_only=True)
+        train_examples = all_examples[:n_train]
+        test_examples = all_examples[n_train:n_train + n_test]
         benchmark_label = "GAIA"
         _mg_lookup = {ex.prompt: ex for ex in all_examples}
         def tool_setup_fn(task_prompt):
@@ -461,7 +477,7 @@ def run(
     elif target_mas == "agentcoder":
         from optpilot.data.benchmarks_humaneval import load_humaneval_examples, score_humaneval
         from optpilot.tools.agentcoder_tools import CodeExecutionEnvironment, build_tools as ac_build
-        all_examples = load_humaneval_examples(requested_total)
+        all_examples = load_humaneval_examples(total)
         train_examples = all_examples[:n_train]
         test_examples = all_examples[n_train:n_train + n_test]
         benchmark_label = "HumanEval"
@@ -479,9 +495,6 @@ def run(
 
     train_suite = OfficialBenchmarkSuite(train_examples)
     test_suite = OfficialBenchmarkSuite(test_examples)
-    actual_total = len(train_examples) + len(test_examples)
-    n_train = len(train_examples)
-    n_test = len(test_examples)
 
     # ------------------------------------------------------------------
     # Load baseline DAG
@@ -583,12 +596,13 @@ def run(
     os.environ["OPENEVOLVE_CONCURRENCY"] = str(concurrency)
     os.environ["OPENEVOLVE_TIMEOUT"] = str(timeout)
     os.environ["OPENEVOLVE_EVAL_TASKS"] = str(len(selected_eval_prompts))
-    os.environ["OPENEVOLVE_TOTAL_TASKS"] = str(actual_total)
+    os.environ["OPENEVOLVE_TOTAL_TASKS"] = str(total)
     os.environ["OPENEVOLVE_TARGET_MAS"] = target_mas
     os.environ["OPENEVOLVE_BENCHMARK"] = benchmark or ""
+    os.environ["OPENEVOLVE_GAIA_SUPPORTED_ONLY"] = "strict" if benchmark == "gaia" else ""
     os.environ["OPENEVOLVE_EVAL_PROMPTS_JSON"] = json.dumps(selected_eval_prompts, ensure_ascii=False)
     os.environ["OPENEVOLVE_USE_PRIORS"] = "alternate" if with_priors else ""
-    os.environ["OPENEVOLVE_GAIA_SUPPORTED_ONLY"] = "strict" if gaia_supported_only else ""
+    os.environ["OPENEVOLVE_SKIP_DIAGNOSE"] = "1" if skip_diagnose else ""
     os.environ["OPTPILOT_PROJECT_ROOT"] = str(Path(__file__).resolve().parents[1])
 
     # Ensure Together AI API key is visible to SkyDiscover
@@ -601,16 +615,16 @@ def run(
     # ------------------------------------------------------------------
     print("=" * 65)
     mode_label = "WITH PRIORS" if with_priors else "BLIND"
-    print(f"  OpenEvolve {mode_label} — Target MAS: {target_mas}")
+    print(f"  Evolve ({search}) {mode_label} — Target MAS: {target_mas}")
     print("=" * 65)
+    print(f"  Search:         {search}")
+    print(f"  Config:         {config_file}")
     print(f"  Priors:         {'Yes' if with_priors else 'No (blind baseline)'}")
     print(f"  Model:          {model}")
     print(f"  DAG:            {original_dag.dag_id}")
     print(f"  Agents:         {', '.join(original_dag.agent_nodes.keys())}")
     print(f"  Iterations:     {iterations}")
     print(f"  Eval tasks:     {eval_tasks} per iteration")
-    if gaia_supported_only and (benchmark == "gaia" or target_mas in ("magentic", "simple_star")):
-        print("  GAIA filter:    strict supported_only (no attachments / no multimodal cues)")
     print(f"  Concurrency:    {concurrency}")
     print(f"  Timeout:        {timeout}s/task")
     print(f"  Train:          {len(train_examples)} tasks  {dict(train_suite.benchmark_counts())}")
@@ -620,26 +634,24 @@ def run(
     print()
 
     # ------------------------------------------------------------------
-    # Run OpenEvolve
+    # Run evolutionary search
     # ------------------------------------------------------------------
-    print("Starting OpenEvolve evolution...")
+    print(f"Starting evolution ({search})...")
     t0 = time.time()
 
     evaluator_file = EVALUATOR_FILE if target_mas == "ag2" else EVALUATOR_MULTI_FILE
-    # Mutation model: use config.yaml's llm.models setting (don't pass model= to
-    # run_discovery so skydiscover reads it from config instead of overriding).
     result = run_discovery(
         evaluator=str(evaluator_file),
         initial_program=initial_program_path,
         iterations=iterations,
-        search="openevolve_native",
-        config=str(CONFIG_FILE),
-        output_dir=openevolve_output_dir,
+        search=search,
+        config=str(config_file),
+        output_dir=evolve_output_dir,
         cleanup=False,
     )
 
     evolution_time = time.time() - t0
-    print(f"\nOpenEvolve completed in {evolution_time:.1f}s")
+    print(f"\nEvolution ({search}) completed in {evolution_time:.1f}s")
     print(f"  Initial score: {result.initial_score}")
     print(f"  Best score:    {result.best_score}")
     print(f"  Best metrics:  {result.metrics}")
@@ -670,9 +682,9 @@ def run(
     selected_code = ""
 
     final_best_code = result.best_solution
-    (dag_versions_dir / "openevolve_best.py").write_text(final_best_code, encoding="utf-8")
+    (dag_versions_dir / "evolve_best.py").write_text(final_best_code, encoding="utf-8")
 
-    shortlist = _load_shadow_candidates(Path(openevolve_output_dir))
+    shortlist = _load_shadow_candidates(Path(evolve_output_dir))
     if not shortlist:
         shortlist = [
             ShadowCandidate(
@@ -681,7 +693,7 @@ def run(
                 train_combined_score=float(result.best_score or 0.0),
                 train_accuracy=float(result.metrics.get("accuracy", 0.0) or 0.0),
                 iteration=iterations,
-                source_path=dag_versions_dir / "openevolve_best.py",
+                source_path=dag_versions_dir / "evolve_best.py",
             )
         ]
 
@@ -752,7 +764,7 @@ def run(
                 f"(shadow acc {baseline_shadow_acc:.3f} -> {shadow_selection['selected_shadow_accuracy']:.3f})"
             )
     else:
-        print("\nShadow gate skipped: no held-out train tasks beyond the OpenEvolve eval set.")
+        print("\nShadow gate skipped: no held-out train tasks beyond the eval set.")
         try:
             selected_dag = _dag_from_python_source(final_best_code)
             selected_code = final_best_code
@@ -789,7 +801,7 @@ def run(
             print(f"\n=== Test evaluation run {run_i}/{n_runs} ===")
             final = await _eval_on_test(
                 test_runner, selected_dag, test_suite, concurrency,
-                f"OPENEVOLVE BEST (run {run_i})",
+                f"EVOLVED BEST (run {run_i})",
                 output_base=artifact_dir / f"test_final_run{run_i}",
             )
             baseline = await _eval_on_test(
@@ -836,9 +848,10 @@ def run(
     # ------------------------------------------------------------------
     result_path = RESULTS_DIR / f"{result_stem}.json"
     output = {
-        "experiment": f"{target_mas}_openevolve{'_priors' if with_priors else '_blind'}",
+        "experiment": f"{target_mas}_{search}{'_priors' if with_priors else '_blind'}",
         "target_mas": target_mas,
-        "target_mas_name": target_mas,
+        "search_backend": search,
+        "config_file": str(config_file),
         "with_priors": with_priors,
         "model": model,
         "dag": original_dag.dag_id,
@@ -846,7 +859,6 @@ def run(
         "dag_versions_dir": str(dag_versions_dir),
         "n_train": n_train,
         "n_test": n_test,
-        "gaia_supported_only": gaia_supported_only,
         "iterations": iterations,
         "eval_tasks_per_iteration": eval_tasks,
         "concurrency": concurrency,
@@ -856,7 +868,7 @@ def run(
             "best_score": result.best_score,
             "best_metrics": result.metrics,
             "elapsed_s": evolution_time,
-            "output_dir": openevolve_output_dir,
+            "output_dir": evolve_output_dir,
         },
         "shadow_selection": shadow_selection,
         "test_baseline": baseline_test_stats,
@@ -870,7 +882,7 @@ def run(
     # Summary
     # ------------------------------------------------------------------
     print(f"\n{'=' * 65}")
-    print(f"  Summary — OpenEvolve ({iterations} iterations)")
+    print(f"  Summary — Evolve [{search}] ({iterations} iterations)")
     print(f"{'=' * 65}")
     print(f"  Evolution time:   {evolution_time:.1f}s")
     print(f"  Initial score:    {result.initial_score}")
@@ -883,7 +895,7 @@ def run(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="OpenEvolve cold-start experiment for multiple target MAS presets",
+        description="Evolutionary search experiment for MAS DAGs (supports OpenEvolve, AdaEvolve, etc.)",
     )
     parser.add_argument("--target-mas", dest="target_mas", default="ag2",
                         help=f"Legacy target MAS preset (choices: {list(TARGET_MASES.keys())})")
@@ -891,25 +903,22 @@ if __name__ == "__main__":
                         help=f"Topology to evolve (choices: {list(TOPOLOGIES.keys())}). Use with --benchmark.")
     parser.add_argument("--benchmark", default=None, choices=list(BENCHMARKS),
                         help=f"Benchmark to evaluate on (choices: {list(BENCHMARKS)}). Use with --topology.")
+    parser.add_argument("--search", default="openevolve_native", choices=list(SEARCH_BACKENDS),
+                        help=f"Search backend (choices: {list(SEARCH_BACKENDS)}). Default: openevolve_native")
+    parser.add_argument("--config", default=None,
+                        help="Path to config YAML (overrides per-backend default)")
     parser.add_argument("--dag", default=None, help="Path to MASDAG YAML (overrides target_mas default)")
     parser.add_argument("--train", type=int, default=100, help="Train set size")
     parser.add_argument("--test", type=int, default=100, help="Test set size")
-    parser.add_argument("--iterations", type=int, default=50, help="OpenEvolve iterations")
+    parser.add_argument("--iterations", type=int, default=50, help="Evolution iterations")
     parser.add_argument("--eval-tasks", type=int, default=20, help="Tasks per evaluation")
     parser.add_argument("--model", default="openai/gpt-oss-120b", help="Model ID on Together AI")
     parser.add_argument("--concurrency", type=int, default=512, help="Max concurrent tasks")
     parser.add_argument("--timeout", type=int, default=600, help="Timeout per task in seconds")
     parser.add_argument("--with-priors", dest="with_priors", action="store_true",
                         help="Inject prior experience (Jacobian/recipes/negatives) into evaluator feedback")
-    parser.add_argument(
-        "--gaia-supported-only",
-        dest="gaia_supported_only",
-        action="store_true",
-        help=(
-            "For GAIA only: use the strict supported_only subset "
-            "(no attachments / no multimodal cues) and split it evenly into train/test."
-        ),
-    )
+    parser.add_argument("--skip-diagnose", dest="skip_diagnose", action="store_true",
+                        help="Skip FM diagnosis, use pure accuracy as fitness score")
     args = parser.parse_args()
 
     run(
@@ -917,6 +926,8 @@ if __name__ == "__main__":
         target_mas=args.target_mas,
         topology=args.topology,
         benchmark=args.benchmark,
+        search=args.search,
+        config_path=args.config,
         n_train=args.train,
         n_test=args.test,
         iterations=args.iterations,
@@ -925,5 +936,5 @@ if __name__ == "__main__":
         concurrency=args.concurrency,
         timeout=args.timeout,
         with_priors=args.with_priors,
-        gaia_supported_only=args.gaia_supported_only,
+        skip_diagnose=args.skip_diagnose,
     )

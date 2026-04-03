@@ -166,29 +166,49 @@ def extract_train_improving_mutations(
     programs: dict[str, ProgramRecord],
     min_score_delta: float = 0.0,
 ) -> list[Mutation]:
-    """Find parent→child pairs where child improved on train set."""
-    mutations: list[Mutation] = []
-    for prog in programs.values():
-        if prog.parent_id is None or prog.parent_id not in programs:
-            continue
-        parent = programs[prog.parent_id]
+    """Find baseline→child pairs where child improved over original baseline.
 
-        parent_score = parent.metrics.get("combined_score", 0.0)
+    Instead of comparing parent→child, we compare every program against the
+    baseline (generation 0 programs with no parent). This gives us the full
+    delta from the starting point, which is what we want for recipe extraction.
+    """
+    # Find baseline programs: iteration 0 or no parent
+    baselines = [p for p in programs.values() if p.parent_id is None]
+    if not baselines:
+        # SkyDiscover MAP-Elites: iteration 0 programs have parent_id pointing to
+        # the initial seed which may not be in the checkpoint. Use iteration_found=0.
+        baselines = [p for p in programs.values() if p.iteration_found == 0]
+    if not baselines:
+        print("  Warning: no baseline programs found")
+        return []
+
+    # Use the best baseline as reference
+    best_baseline = max(baselines, key=lambda p: p.metrics.get("combined_score", 0.0))
+    baseline_score = best_baseline.metrics.get("combined_score", 0.0)
+    baseline_acc = best_baseline.metrics.get("accuracy", 0.0)
+    print(f"  Baseline: {best_baseline.id[:8]} score={baseline_score:.4f} acc={baseline_acc:.0%}")
+
+    mutations: list[Mutation] = []
+    seen_children = set()
+    for prog in programs.values():
+        if prog.id == best_baseline.id or prog.id in seen_children:
+            continue
+        seen_children.add(prog.id)
+
         child_score = prog.metrics.get("combined_score", 0.0)
-        parent_acc = parent.metrics.get("accuracy", 0.0)
         child_acc = prog.metrics.get("accuracy", 0.0)
 
-        score_delta = child_score - parent_score
+        score_delta = child_score - baseline_score
         if score_delta > min_score_delta:
             mutations.append(Mutation(
-                parent=parent,
+                parent=best_baseline,
                 child=prog,
                 train_score_delta=score_delta,
-                train_accuracy_delta=child_acc - parent_acc,
+                train_accuracy_delta=child_acc - baseline_acc,
             ))
 
     mutations.sort(key=lambda m: m.train_score_delta, reverse=True)
-    print(f"  Found {len(mutations)} train-improving mutations")
+    print(f"  Found {len(mutations)} mutations improving over baseline")
     return mutations
 
 
@@ -216,61 +236,32 @@ def code_to_dag(code: str) -> MASDAG | None:
 #  Step 4: Test set evaluation                                         #
 # ------------------------------------------------------------------ #
 
-async def evaluate_on_test(
+async def evaluate_shadow_gate(
     runner: OptPilotRunner,
-    diagnoser: Diagnoser,
     dag: MASDAG,
-    test_suite: OfficialBenchmarkSuite,
+    shadow_suite: OfficialBenchmarkSuite,
     concurrency: int,
-) -> dict:
-    """Evaluate a DAG on test set, return accuracy + per-group FM rates."""
-    tasks = test_suite.tasks()
+) -> float:
+    """Evaluate a DAG on shadow gate, return accuracy only (no FM classification)."""
+    tasks = shadow_suite.tasks()
     traces = await runner.arun_batch(tasks, dag=dag, max_concurrency=concurrency)
-
     n = len(traces)
     correct = sum(1 for t in traces if t.task_score and t.task_score > 0)
-    accuracy = correct / n if n > 0 else 0.0
-
-    # Classify FM groups
-    fm_rates: dict[str, float] = {g: 0.0 for g in GROUP_IDS}
-    try:
-        from optpilot.data.fm_taxonomy_6group import GROUP_DEFINITIONS
-        from optpilot.models import FMLabel, FMProfile
-        import asyncio as _aio
-
-        sem = _aio.Semaphore(64)
-
-        async def _classify_one(trace):
-            async with sem:
-                return await diagnoser._aclassify(trace)
-
-        label_dicts = await asyncio.gather(*[_classify_one(t) for t in traces])
-        fm_counts: dict[str, int] = {g: 0 for g in GROUP_IDS}
-        for labels_dict in label_dicts:
-            for gid in GROUP_IDS:
-                if labels_dict.get(gid, False):
-                    fm_counts[gid] += 1
-        fm_rates = {g: fm_counts[g] / n for g in GROUP_IDS} if n > 0 else fm_rates
-    except Exception as e:
-        print(f"  Warning: FM classification failed: {e}")
-
-    return {"accuracy": accuracy, "correct": correct, "n": n, "fm_rates": fm_rates}
+    return correct / n if n > 0 else 0.0
 
 
-async def validate_mutations_on_test(
+async def validate_mutations_on_shadow(
     mutations: list[Mutation],
     runner: OptPilotRunner,
-    diagnoser: Diagnoser,
-    test_suite: OfficialBenchmarkSuite,
+    shadow_suite: OfficialBenchmarkSuite,
     concurrency: int,
 ) -> list[EffectiveMutation]:
-    """Re-evaluate train-improving mutations on test set, filter truly effective ones."""
+    """Re-evaluate train-improving mutations on shadow gate (accuracy only)."""
 
-    # Deduplicate DAGs: same code → same DAG, only evaluate once
-    code_to_result: dict[str, dict] = {}
+    # Deduplicate DAGs
+    code_to_acc: dict[str, float] = {}
     unique_codes: dict[str, MASDAG] = {}
 
-    # Collect all unique codes (parents + children)
     for m in mutations:
         for code in (m.parent.solution, m.child.solution):
             if code not in unique_codes:
@@ -278,57 +269,56 @@ async def validate_mutations_on_test(
                 if dag is not None:
                     unique_codes[code] = dag
 
-    print(f"  {len(unique_codes)} unique DAGs to evaluate on test set")
+    print(f"  {len(unique_codes)} unique DAGs to evaluate on shadow gate ({len(shadow_suite.tasks())} tasks)")
 
-    # Evaluate each unique DAG
     for i, (code, dag) in enumerate(unique_codes.items()):
-        if code in code_to_result:
+        if code in code_to_acc:
             continue
         print(f"  Evaluating DAG {i+1}/{len(unique_codes)}...")
         try:
-            result = await evaluate_on_test(runner, diagnoser, dag, test_suite, concurrency)
-            code_to_result[code] = result
+            acc = await evaluate_shadow_gate(runner, dag, shadow_suite, concurrency)
+            code_to_acc[code] = acc
         except Exception as e:
             print(f"    Failed: {e}")
-            code_to_result[code] = {"accuracy": 0.0, "correct": 0, "n": 0, "fm_rates": {}}
+            code_to_acc[code] = 0.0
 
-    # Filter: test accuracy must also improve
+    # Filter: shadow accuracy must also improve
     effective: list[EffectiveMutation] = []
     for m in mutations:
-        parent_result = code_to_result.get(m.parent.solution)
-        child_result = code_to_result.get(m.child.solution)
-        if parent_result is None or child_result is None:
+        parent_acc = code_to_acc.get(m.parent.solution)
+        child_acc = code_to_acc.get(m.child.solution)
+        if parent_acc is None or child_acc is None:
             continue
 
         parent_dag = unique_codes.get(m.parent.solution)
         child_dag = unique_codes.get(m.child.solution)
 
-        test_delta = child_result["accuracy"] - parent_result["accuracy"]
-        if test_delta <= 0:
-            continue  # Not effective on test set
+        acc_delta = child_acc - parent_acc
+        if acc_delta <= 0:
+            continue  # Not effective on shadow gate
 
-        # Compute per-group FM deltas
+        # FM deltas from train metrics (baseline vs child)
         fm_deltas = {}
         for gid in GROUP_IDS:
-            parent_rate = parent_result["fm_rates"].get(gid, 0.0)
-            child_rate = child_result["fm_rates"].get(gid, 0.0)
-            fm_deltas[gid] = child_rate - parent_rate  # negative = improvement
+            baseline_fm = m.parent.metrics.get(f"fm_{gid}", 0.0)
+            child_fm = m.child.metrics.get(f"fm_{gid}", 0.0)
+            fm_deltas[gid] = child_fm - baseline_fm  # negative = improvement
 
         effective.append(EffectiveMutation(
             parent=m.parent,
             child=m.child,
             train_score_delta=m.train_score_delta,
             train_accuracy_delta=m.train_accuracy_delta,
-            parent_test_accuracy=parent_result["accuracy"],
-            child_test_accuracy=child_result["accuracy"],
-            test_accuracy_delta=test_delta,
+            parent_test_accuracy=parent_acc,
+            child_test_accuracy=child_acc,
+            test_accuracy_delta=acc_delta,
             parent_dag=parent_dag,
             child_dag=child_dag,
             fm_deltas=fm_deltas,
         ))
 
     effective.sort(key=lambda e: e.test_accuracy_delta, reverse=True)
-    print(f"  {len(effective)} mutations effective on test set (out of {len(mutations)} train-improving)")
+    print(f"  {len(effective)} mutations effective on shadow gate (out of {len(mutations)} train-improving)")
     return effective
 
 
@@ -425,7 +415,7 @@ def summarize_priors(
         pattern_counts[m.observed_pattern] += 1
 
         # Extract topology features from the child DAG
-        topo = {"has_hub": False, "has_loop": False}
+        topo = {"has_hub": False}
         if m.child_dag is not None:
             topo = m.child_dag.extract_topology_features()
 
@@ -439,7 +429,6 @@ def summarize_priors(
                     "fm_delta": delta,
                     "pass_delta": m.test_accuracy_delta,
                     "has_hub": topo["has_hub"],
-                    "has_loop": topo["has_loop"],
                 })
 
         # Also record for FM groups that didn't improve (neutral/worsened)
@@ -451,7 +440,6 @@ def summarize_priors(
                     "fm_delta": delta,
                     "pass_delta": m.test_accuracy_delta,
                     "has_hub": topo["has_hub"],
-                    "has_loop": topo["has_loop"],
                 })
 
     # --- Build Jacobian warmup records ---
@@ -468,7 +456,6 @@ def summarize_priors(
                 "fm_delta": o["fm_delta"],
                 "pass_delta": o["pass_delta"],
                 "has_hub": o.get("has_hub", False),
-                "has_loop": o.get("has_loop", False),
                 "timestamp": datetime.now().isoformat(),
             })
 
@@ -724,7 +711,6 @@ def apply_jacobian_warmup(
             pass_delta=rec["pass_delta"],
             timestamp=rec.get("timestamp", ""),
             has_hub=rec.get("has_hub", False),
-            has_loop=rec.get("has_loop", False),
         )
         jacobian.update(outcome)
 
@@ -869,6 +855,101 @@ def _load_benchmark_for_target_mas(
         raise ValueError(f"Unknown target_mas: {target_mas}")
 
 
+def _load_shadow_gate(
+    benchmark: str,
+    total_tasks: int,
+    n_train: int,
+    shadow_gate_size: int = 20,
+) -> tuple[OfficialBenchmarkSuite, object, object, object]:
+    """Load a small shadow gate from the test split for posterior filtering.
+
+    Takes `shadow_gate_size` tasks from the test split (examples[n_train:]).
+    These tasks don't overlap with train (used for evolution) or the remaining
+    test tasks (reserved for final blind-vs-guided comparison).
+    """
+    if benchmark == "math":
+        full_suite = load_online_benchmark_suite(total_tasks)
+        by_bench: dict[str, list] = defaultdict(list)
+        for ex in full_suite.examples:
+            by_bench[ex.benchmark_name].append(ex)
+        test_examples = []
+        for bname, examples in sorted(by_bench.items()):
+            bench_train = round(len(examples) * n_train / total_tasks)
+            bench_train = min(bench_train, len(examples))
+            test_examples.extend(examples[bench_train:])
+        shadow_examples = test_examples[:shadow_gate_size]
+        shadow_suite = OfficialBenchmarkSuite(shadow_examples)
+        return shadow_suite, None, None, None
+
+    elif benchmark == "livecodebench":
+        from optpilot.data.benchmarks_livecodebench import load_livecodebench_examples, score_livecodebench
+        from optpilot.tools.agentcoder_tools import CodeExecutionEnvironment, build_tools
+        all_examples = load_livecodebench_examples(total_tasks)
+        shadow_examples = all_examples[n_train:n_train + shadow_gate_size]
+        shadow_suite = OfficialBenchmarkSuite(shadow_examples)
+        lookup = {ex.prompt: ex for ex in all_examples}
+
+        def tool_setup(tp):
+            return build_tools(CodeExecutionEnvironment())
+
+        def score_fn(tp, _dag, exec_trace):
+            ex = lookup.get(tp)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_livecodebench(pred, ex)
+
+        return shadow_suite, score_fn, lambda _: "LiveCodeBench", tool_setup
+
+    elif benchmark == "gaia":
+        from optpilot.data.benchmarks_gaia import load_gaia_examples, score_gaia
+        from optpilot.tools.magentic_tools import GeneralEnvironment, build_tools
+        all_examples = load_gaia_examples(total_tasks)
+        shadow_examples = all_examples[n_train:n_train + shadow_gate_size]
+        shadow_suite = OfficialBenchmarkSuite(shadow_examples)
+        lookup = {ex.prompt: ex for ex in all_examples}
+
+        def tool_setup(tp):
+            ex = lookup.get(tp)
+            docs = ex.metadata.get("context_docs", {}) if ex else {}
+            return build_tools(GeneralEnvironment(docs))
+
+        def score_fn(tp, _dag, exec_trace):
+            ex = lookup.get(tp)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_gaia(pred, ex.gold_answers[0])
+
+        return shadow_suite, score_fn, lambda _: "GAIA", tool_setup
+
+    elif benchmark == "swebench":
+        from optpilot.data.benchmarks_swebench import load_swebench_examples, score_swebench
+        all_examples = load_swebench_examples(total_tasks)
+        shadow_examples = all_examples[n_train:n_train + shadow_gate_size]
+        shadow_suite = OfficialBenchmarkSuite(shadow_examples)
+        lookup = {ex.prompt: ex for ex in all_examples}
+
+        def tool_setup(tp):
+            from optpilot.tools.hyperagent_tools import CodeEnvironment, build_tools
+            ex = lookup.get(tp)
+            repo = ex.metadata.get("repo", "") if ex else ""
+            base_commit = ex.metadata.get("base_commit", "") if ex else ""
+            return build_tools(CodeEnvironment(repo=repo, base_commit=base_commit))
+
+        def score_fn(tp, _dag, exec_trace):
+            ex = lookup.get(tp)
+            if ex is None:
+                return 0.0
+            pred = exec_trace.steps[-1].output_text if exec_trace.steps else ""
+            return score_swebench(pred, ex.gold_answers[0])
+
+        return shadow_suite, score_fn, lambda _: "SWE-bench-Lite", tool_setup
+
+    else:
+        raise ValueError(f"Unknown benchmark: {benchmark}")
+
+
 def run(
     openevolve_dir: str,
     model: str = "openai/gpt-oss-120b",
@@ -879,12 +960,14 @@ def run(
     skip_test_eval: bool = False,
     apply_warmup: bool = True,
     target_mas: str = "ag2",
+    benchmark: str | None = None,
 ):
     openevolve_path = Path(openevolve_dir)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = RESULTS_DIR / f"offline_analysis_{target_mas}_{timestamp}"
+    label = f"{target_mas}_{benchmark}" if benchmark else target_mas
+    output_dir = RESULTS_DIR / f"offline_analysis_{label}_{timestamp}"
     print("=" * 65)
-    print(f"  Offline Trace Analysis — OpenEvolve → Prior Extraction ({target_mas})")
+    print(f"  Offline Trace Analysis — OpenEvolve → Prior Extraction ({label})")
     print("=" * 65)
 
     # --- Step 1: Load programs ---
@@ -912,6 +995,12 @@ def run(
         for m in mutations:
             parent_dag = code_to_dag(m.parent.solution)
             child_dag = code_to_dag(m.child.solution)
+            # FM deltas from train metrics (baseline vs child)
+            fm_deltas = {}
+            for gid in GROUP_IDS:
+                baseline_fm = m.parent.metrics.get(f"fm_{gid}", 0.0)
+                child_fm = m.child.metrics.get(f"fm_{gid}", 0.0)
+                fm_deltas[gid] = child_fm - baseline_fm
             effective.append(EffectiveMutation(
                 parent=m.parent,
                 child=m.child,
@@ -919,36 +1008,44 @@ def run(
                 train_accuracy_delta=m.train_accuracy_delta,
                 parent_dag=parent_dag,
                 child_dag=child_dag,
-                fm_deltas={},
+                fm_deltas=fm_deltas,
             ))
     else:
         # --- Step 4: Test set validation ---
-        print(f"\n[4/6] Validating on held-out test set (target_mas={target_mas})...")
-        test_suite, custom_score_fn, bench_resolver, tool_setup_fn = (
-            _load_benchmark_for_target_mas(target_mas, total_tasks, n_train)
-        )
-        print(f"  Test set: {len(test_suite.tasks())} tasks")
+        print(f"\n[4/6] Validating on shadow gate ({label})...")
+        if benchmark:
+            shadow_suite, custom_score_fn, bench_resolver, tool_setup_fn = (
+                _load_shadow_gate(benchmark, total_tasks, n_train)
+            )
+        else:
+            shadow_suite, custom_score_fn, bench_resolver, tool_setup_fn = (
+                _load_benchmark_for_target_mas(target_mas, total_tasks, n_train)
+            )
+        print(f"  Shadow gate: {len(shadow_suite.tasks())} tasks")
 
         _BENCH_LABELS = {
             "ag2": "AG2_MathChat",
             "appworld": "AppWorld",
             "hyperagent": "SWE-bench-Lite",
             "magentic": "GAIA",
-            "agentcoder": "HumanEval",
+            "agentcoder": "LiveCodeBench",
+            "math": "Math",
+            "livecodebench": "LiveCodeBench",
+            "gaia": "GAIA",
+            "swebench": "SWE-bench-Lite",
         }
         runner = OptPilotRunner(
             dag=None,
             model=model,
-            benchmark_name=_BENCH_LABELS.get(target_mas, target_mas.upper()),
-            score_fn=custom_score_fn or test_suite.score_task,
-            benchmark_name_resolver=bench_resolver or test_suite.benchmark_name_for_task,
+            benchmark_name=_BENCH_LABELS.get(benchmark or target_mas, (benchmark or target_mas).upper()),
+            score_fn=custom_score_fn or shadow_suite.score_task,
+            benchmark_name_resolver=bench_resolver or shadow_suite.benchmark_name_for_task,
             timeout=timeout,
             tool_setup_fn=tool_setup_fn,
         )
-        diagnoser = Diagnoser()
 
         effective = asyncio.run(
-            validate_mutations_on_test(mutations, runner, diagnoser, test_suite, concurrency)
+            validate_mutations_on_shadow(mutations, runner, shadow_suite, concurrency)
         )
 
     if not effective:
@@ -1028,6 +1125,8 @@ if __name__ == "__main__":
     parser.add_argument("--n-train", type=int, default=100, help="Number of train tasks")
     parser.add_argument("--concurrency", type=int, default=512, help="Max concurrent tasks")
     parser.add_argument("--timeout", type=int, default=600, help="Timeout per task")
+    parser.add_argument("--benchmark", default=None, choices=("math", "livecodebench", "gaia", "swebench"),
+                        help="Benchmark ID (for topology × benchmark mode, overrides target-mas benchmark)")
     parser.add_argument("--skip-test-eval", action="store_true", help="Skip test set eval (use train-improving only)")
     parser.add_argument("--no-warmup", action="store_true", help="Don't apply warmup to Jacobian")
     args = parser.parse_args()
@@ -1042,4 +1141,5 @@ if __name__ == "__main__":
         timeout=args.timeout,
         skip_test_eval=args.skip_test_eval,
         apply_warmup=not args.no_warmup,
+        benchmark=args.benchmark,
     )

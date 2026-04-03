@@ -5,13 +5,14 @@ GAIA is gated on HuggingFace. We use a combination of:
 2. If GAIA access is available, load from HF directly
 
 Tasks require agents to search, calculate, and synthesize information
-from multiple sources — matching Magentic-One's general-purpose design.
+from multiple sources - matching Magentic-One's general-purpose design.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+from collections import defaultdict
+from typing import Any, Iterable
 
 from optpilot.data.benchmarks import BenchmarkExample
 
@@ -152,7 +153,65 @@ _TASKS: list[dict[str, Any]] = [
 ]
 
 
-def load_gaia_examples(limit: int = 165) -> list[BenchmarkExample]:
+_STRICT_UNSUPPORTED_TERMS = (
+    "attached",
+    "attachment",
+    "image",
+    "photo",
+    "screenshot",
+    "video",
+    "youtube",
+    "audio",
+    "listen",
+    "pdf",
+    "spreadsheet",
+    "excel",
+    "csv",
+    "docx",
+    "pptx",
+    "xlsx",
+    "zip",
+    "png",
+    "jpg",
+    "jpeg",
+    "mp3",
+)
+
+
+def _question_mentions_unsupported_modality(question: str) -> bool:
+    lowered = question.lower()
+    return any(term in lowered for term in _STRICT_UNSUPPORTED_TERMS)
+
+
+def is_strict_supported_gaia_row(question: str, file_name: str | None = None) -> bool:
+    """Return whether the current GAIA tool stack can solve the task at all."""
+    if file_name:
+        return False
+    return not _question_mentions_unsupported_modality(question)
+
+
+def split_gaia_examples_evenly(
+    examples: Iterable[BenchmarkExample],
+) -> tuple[list[BenchmarkExample], list[BenchmarkExample]]:
+    """Split GAIA examples evenly while balancing difficulty levels when present."""
+    by_level: dict[str, list[BenchmarkExample]] = defaultdict(list)
+    for example in examples:
+        level = str(example.metadata.get("level", "unknown"))
+        by_level[level].append(example)
+
+    train_examples: list[BenchmarkExample] = []
+    test_examples: list[BenchmarkExample] = []
+    for level in sorted(by_level):
+        level_examples = by_level[level]
+        for idx, example in enumerate(level_examples):
+            if idx % 2 == 0:
+                train_examples.append(example)
+            else:
+                test_examples.append(example)
+    return train_examples, test_examples
+
+
+def load_gaia_examples(limit: int = 165, *, strict_supported_only: bool = False) -> list[BenchmarkExample]:
     """Load GAIA examples. Tries HF first, falls back to synthetic."""
     # Try loading real GAIA dataset
     try:
@@ -163,19 +222,28 @@ def load_gaia_examples(limit: int = 165) -> list[BenchmarkExample]:
         )
         examples = []
         for i, item in enumerate(ds):
-            if i >= limit:
-                break
+            question = item["Question"]
+            file_name = str(item.get("file_name", "") or "")
+            if strict_supported_only and not is_strict_supported_gaia_row(
+                question,
+                file_name=file_name,
+            ):
+                continue
             examples.append(BenchmarkExample(
                 benchmark_name="GAIA",
                 task_id=item.get("task_id", f"gaia_real_{i}"),
-                prompt=item["Question"],
+                prompt=question,
                 gold_answers=(str(item.get("Final answer", "")),),
                 answer_type="exact",
                 metadata={
                     "context_docs": {},
                     "level": item.get("Level", ""),
+                    "file_name": file_name,
+                    "file_path": str(item.get("file_path", "") or ""),
                 },
             ))
+            if len(examples) >= limit:
+                break
         if examples:
             return examples
     except Exception:
@@ -184,6 +252,11 @@ def load_gaia_examples(limit: int = 165) -> list[BenchmarkExample]:
     # Fallback to synthetic
     examples = []
     for task in _TASKS[:limit]:
+        if strict_supported_only and not is_strict_supported_gaia_row(
+            task["prompt"],
+            file_name=None,
+        ):
+            continue
         examples.append(BenchmarkExample(
             benchmark_name="GAIA",
             task_id=task["task_id"],

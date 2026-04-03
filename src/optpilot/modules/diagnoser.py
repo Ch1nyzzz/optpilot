@@ -16,50 +16,54 @@ from optpilot.models import FMLabel, FMProfile, MASTrace
 FULL_TRACE_THRESHOLD = 15000
 
 
-CLASSIFICATION_PROMPT = """\
-You are a careful evaluator for multi-agent system execution traces.
+def _build_classification_prompt() -> str:
+    """Build classification prompt from GROUP_DEFINITIONS with full context."""
+    lines = [
+        "You are a careful evaluator for multi-agent system execution traces.",
+        "",
+        "Your job is to inspect a trace and mark which problems are present using "
+        "the following 6-group taxonomy.",
+        "",
+        "## Taxonomy Definitions",
+        "",
+    ]
+    for gid in GROUP_IDS:
+        gdef = GROUP_DEFINITIONS[gid]
+        lines.append(f"### {gid} = {gdef['name']}")
+        lines.append(f"**Definition:** {gdef['description']}")
+        if gdef.get("analyze_hint"):
+            lines.append(f"**What to look for:** {gdef['analyze_hint']}")
+        if gdef.get("failure_examples"):
+            lines.append("**Concrete examples of this failure:**")
+            for ex_line in gdef["failure_examples"].split("\n"):
+                ex_line = ex_line.strip()
+                if ex_line:
+                    lines.append(f"  - {ex_line}")
+        lines.append("")
 
-Your job is to inspect a failed trace and mark which problems are present using
-the following 6-group taxonomy.
+    lines.extend([
+        "## Important rules",
+        "1. A trace may have multiple true labels.",
+        "2. A trace may also have NO failure labels at all.",
+        "3. If none of A-F clearly applies, output all false.",
+        "4. Do not assume a trace is faulty just because it comes from a benchmark dataset.",
+        "5. Label only what is clearly supported by the trace.",
+        "6. Prefer precision over recall when evidence is weak.",
+        "7. Do NOT force a single root cause. Mark every issue that is clearly present.",
+        "",
+        "Return ONLY valid JSON with this exact schema:",
+        "{",
+    ])
+    for gid in GROUP_IDS:
+        lines.append(f'  "{gid}": false,')
+    # Remove trailing comma from last line
+    lines[-1] = lines[-1].rstrip(",")
+    lines.append("}")
 
-Definitions:
+    return "\n".join(lines)
 
-A = Instruction Non-Compliance
-The agent violates an explicit task requirement, constraint, or role boundary.
 
-B = Execution Loop / Stuck
-The system repeats the same step or keeps going after it should stop, without meaningful progress.
-
-C = Context Loss
-The agent loses previously established context, forgets prior progress, or the conversation effectively resets.
-
-D = Communication Failure
-Critical information is not shared, ignored, or clarification is not requested when needed between agents.
-
-E = Task Drift / Reasoning Error
-The execution path deviates from the intended task, or the agent's action does not match its stated reasoning.
-
-F = Verification Failure
-The system fails to verify properly, verifies too weakly, stops too early, or concludes success incorrectly.
-
-Important rules:
-1. A trace may have multiple true labels.
-2. A trace may also have NO failure labels at all.
-3. If none of A-F clearly applies, output all false.
-4. Do not assume a trace is faulty just because it comes from a benchmark dataset.
-5. Label only what is clearly supported by the trace.
-6. Prefer precision over recall when evidence is weak.
-7. Do NOT force a single root cause. Mark every issue that is clearly present.
-
-Return ONLY valid JSON with this exact schema:
-{
-  "A": false,
-  "B": false,
-  "C": false,
-  "D": false,
-  "E": false,
-  "F": false
-}"""
+CLASSIFICATION_PROMPT = _build_classification_prompt()
 
 
 CLASSIFICATION_USER_TEMPLATE = """\

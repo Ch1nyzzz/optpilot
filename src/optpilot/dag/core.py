@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import json
+import math
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -155,6 +157,65 @@ class MASDAG:
 
         return dag
 
+    def structural_errors(self) -> list[str]:
+        """Return structural validation errors for the DAG.
+
+        The executor tolerates dangling edges by silently skipping missing
+        targets. For optimization workflows this is too permissive: an evolved
+        DAG can look high-scoring while never reaching any agent node. This
+        validation pass catches those cases before evaluation or adoption.
+        """
+        errors: list[str] = []
+        node_ids = set(self.nodes.keys())
+
+        if not node_ids:
+            return ["DAG defines no nodes."]
+
+        start_nodes = list(self.metadata.get("start", []) or [])
+        if not start_nodes:
+            start_nodes = [nid for nid in node_ids if not any(e.target == nid and e.trigger for e in self.edges)]
+        if not start_nodes:
+            errors.append("No start nodes are defined or inferrable.")
+        missing_start = [nid for nid in start_nodes if nid not in node_ids]
+        if missing_start:
+            errors.append(f"Start nodes reference missing nodes: {', '.join(sorted(missing_start))}")
+
+        success_nodes = list(self.metadata.get("success_nodes", []) or [])
+        if not success_nodes:
+            errors.append("No success_nodes are defined in metadata.")
+        missing_success = [nid for nid in success_nodes if nid not in node_ids]
+        if missing_success:
+            errors.append(f"success_nodes reference missing nodes: {', '.join(sorted(missing_success))}")
+
+        for edge in self.edges:
+            if edge.source not in node_ids:
+                errors.append(f"Edge source is missing: {edge.source} -> {edge.target}")
+            if edge.target not in node_ids:
+                errors.append(f"Edge target is missing: {edge.source} -> {edge.target}")
+
+        executable: set[str] = {nid for nid in start_nodes if nid in node_ids}
+        queue: deque[str] = deque(executable)
+        while queue:
+            node_id = queue.popleft()
+            for edge in self.edges:
+                if edge.source != node_id or not edge.trigger or edge.target not in node_ids:
+                    continue
+                if edge.target in executable:
+                    continue
+                executable.add(edge.target)
+                queue.append(edge.target)
+
+        if not any(self.nodes[nid].is_agent for nid in executable if nid in self.nodes):
+            errors.append("No agent node is executable from the configured start nodes.")
+        if success_nodes and not any(nid in executable for nid in success_nodes if nid in node_ids):
+            errors.append("No success node is reachable via trigger edges from the configured start nodes.")
+
+        return errors
+
+    def is_structurally_valid(self) -> bool:
+        """Whether the DAG passes basic structural validation."""
+        return not self.structural_errors()
+
     def save(self, path: str | Path) -> None:
         """Save to YAML file."""
         path = Path(path)
@@ -168,6 +229,15 @@ class MASDAG:
         with open(path) as f:
             data = yaml.safe_load(f)
         return cls.from_dict(data)
+
+    @classmethod
+    def from_initial_program(cls, path: str | Path) -> MASDAG:
+        """Load from a Python initial program file containing build_dag()."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_initial_dag", str(path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        return cls.from_dict(mod.build_dag())
 
     # ---- Repair ----
 
@@ -224,6 +294,61 @@ class MASDAG:
                 node.config.update(action.details)
 
         return new_dag
+
+    # ---- Topology Feature Extraction ----
+
+    def extract_topology_features(self) -> dict[str, bool]:
+        """Extract minimal topology features used by the Jacobian signature.
+
+        Returns ``has_hub`` — the single feature embedded into
+        ``FailureSignature.signature_key()`` so different topology families
+        occupy separate rows in the global Jacobian matrix.
+
+        * ``has_hub``: an agent whose transitive out-degree (through
+          intermediary nodes) reaches >= 60% of all other agents.
+
+        Loop presence is not tracked because evolution adds loops
+        autonomously regardless of the initial topology.
+        """
+        agents = {nid for nid, n in self.nodes.items() if n.is_agent}
+        n_agents = len(agents)
+
+        if n_agents == 0:
+            return {"has_hub": False}
+
+        # --- has_hub ---
+        # Build adjacency from trigger edges, then BFS through intermediaries
+        # to find agent-to-agent transitive out-degree.
+        trigger_adj: dict[str, set[str]] = defaultdict(set)
+        for e in self.edges:
+            if e.trigger:
+                trigger_adj[e.source].add(e.target)
+
+        def _reachable_agents(start: str) -> int:
+            visited: set[str] = set()
+            count = 0
+            queue = deque([start])
+            while queue:
+                cur = queue.popleft()
+                if cur in visited:
+                    continue
+                visited.add(cur)
+                if cur != start and cur in agents:
+                    count += 1
+                    continue  # don't traverse through other agents
+                for nb in trigger_adj.get(cur, ()):
+                    queue.append(nb)
+            return count
+
+        has_hub = False
+        if n_agents > 1:
+            threshold = math.ceil(n_agents * 0.6)
+            for a in agents:
+                if _reachable_agents(a) >= threshold:
+                    has_hub = True
+                    break
+
+        return {"has_hub": has_hub}
 
     # ---- Utility ----
 
